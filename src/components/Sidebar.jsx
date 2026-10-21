@@ -78,7 +78,10 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
       if (!id) return;
       if (target !== '__sessions__') setClosedProjects((c) => ({ ...c, [target]: false }));
       else setClosedSections((c) => ({ ...c, sessions: false }));
-      api.patch(`/api/workspaces/${id}`, { project_id: target === '__sessions__' ? null : target }).catch((err) => alert(err.message));
+      const projectId = target === '__sessions__' ? null : target;
+      api.patch(`/api/workspaces/${id}`, { project_id: projectId })
+        .then((w) => { if ((w.project_id ?? null) !== projectId) throw new Error("Le serveur Supersept n'a pas pris en compte le déplacement : il doit être redémarré pour cette version."); })
+        .catch((err) => alert(err.message));
     },
   });
   const dragProps = (w) => ({

@@ -122,6 +122,9 @@ function systemPrompt(ws, project) {
   ].filter(Boolean).join('\n');
 }
 
+let shuttingDown = false;
+for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, () => { shuttingDown = true; process.exit(0); });
+
 // Workspaces whose next launch must fork the resumed conversation instead of continuing it.
 const forkPending = new Set();
 
@@ -164,9 +167,12 @@ function startAgent(wsId) {
     args.push('--session-id', ws.session_id);
     if (ws.initial_prompt) args.push(ws.initial_prompt);
   }
+  // autostart marks agents to bring back if the hub restarts (update, crash, reboot).
+  db.prepare('UPDATE workspaces SET autostart = 1 WHERE id = ?').run(ws.id);
   const s = spawn(`${ws.id}:agent`, CLAUDE, args, ws.cwd, {
     env: { CLAUDE_HUB_WORKSPACE: ws.id },
     onExit: () => {
+      if (!shuttingDown) db.prepare('UPDATE workspaces SET autostart = 0 WHERE id = ?').run(ws.id);
       settle(ws.id);
       refreshStats(ws.id);
     },
@@ -415,7 +421,10 @@ app.patch('/api/workspaces/:id', wrap(async (req, res) => {
     .run(req.body.name ?? ws.name, req.body.archived === undefined ? ws.archived : req.body.archived ? 1 : 0, base, projectId, now(), ws.id);
   if (projectId !== ws.project_id) logEvent(ws.id, 'moved', getProject(projectId)?.name ?? 'Sessions');
   if (base !== ws.base_branch) refreshStats(ws.id);
-  if (req.body.archived) killWorkspace(ws.id);
+  if (req.body.archived) {
+    db.prepare('UPDATE workspaces SET autostart = 0 WHERE id = ?').run(ws.id);
+    killWorkspace(ws.id);
+  }
   if (status) setStatus(ws.id, status);
   else pushWorkspace(ws.id);
   res.json(decorate(getWorkspace(ws.id)));
@@ -652,4 +661,11 @@ setInterval(() => {
 db.prepare("UPDATE workspaces SET status = 'idle' WHERE status IN ('working', 'waiting')").run();
 for (const { id } of db.prepare('SELECT id FROM workspaces WHERE archived = 0').all()) refreshStats(id);
 
-server.listen(PORT, HOST, () => console.log(`Supersept → http://localhost:${PORT}`));
+server.listen(PORT, HOST, () => {
+  console.log(`Supersept → http://localhost:${PORT}`);
+  // Bring back the agents that were running when the hub stopped.
+  for (const { id, name } of db.prepare('SELECT id, name FROM workspaces WHERE autostart = 1 AND archived = 0').all()) {
+    try { startAgent(id); console.log(`  reprise : ${name}`); }
+    catch (e) { console.log(`  non repris (${name}) : ${e.message.split('\r')[0]}`); }
+  }
+});

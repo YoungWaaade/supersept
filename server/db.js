@@ -112,5 +112,6 @@ addColumn('workspaces', 'model', 'TEXT');
 addColumn('workspaces', 'effort', 'TEXT');
 addColumn('workspaces', 'permission_mode', 'TEXT');
 addColumn('projects', 'run_command', 'TEXT');
+addColumn('workspaces', 'autostart', 'INTEGER NOT NULL DEFAULT 0');
 
 export const memoryFile = (projectId) => path.join(MEMORY_DIR, `${projectId}.md`);
