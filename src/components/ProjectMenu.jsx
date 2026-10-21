@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react';
-import { LuPlus, LuBrain, LuHistory, LuPencil, LuFolderOpen, LuTrash2 } from 'react-icons/lu';
+import { LuPlus, LuBrain, LuHistory, LuPencil, LuFolderOpen, LuTrash2, LuExternalLink } from 'react-icons/lu';
+import { VscGithubAlt } from 'react-icons/vsc';
 import { api } from '../api.js';
 
 // Right-click menu on a project row (Superset has no project page).
-export default function ProjectMenu({ project, x, y, go, onNew, onClose }) {
+export default function ProjectMenu({ project, x, y, go, onNew, onLinkGitHub, onClose }) {
   const ref = useRef(null);
   useEffect(() => {
     const close = (e) => !ref.current?.contains(e.target) && onClose();
@@ -32,6 +33,11 @@ export default function ProjectMenu({ project, x, y, go, onNew, onClose }) {
       <div className="popover-sep" />
       <button className="popover-item" onClick={run(rename)}><LuPencil size={14} /> Renommer</button>
       <button className="popover-item" onClick={run(() => api.post(`/api/projects/${project.id}/open`, { app: 'finder' }))}><LuFolderOpen size={14} /> Afficher dans le Finder</button>
+      {project.github ? (
+        <button className="popover-item" onClick={run(() => window.open(`https://github.com/${project.github}`, '_blank'))}><LuExternalLink size={14} /> Ouvrir {project.github} sur GitHub</button>
+      ) : (
+        <button className="popover-item" onClick={run(() => onLinkGitHub(project))}><VscGithubAlt size={14} /> Relier à un repo GitHub…</button>
+      )}
       <div className="popover-sep" />
       <button className="popover-item danger" onClick={run(remove)}><LuTrash2 size={14} /> Retirer le projet…</button>
     </div>

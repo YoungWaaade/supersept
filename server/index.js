@@ -48,7 +48,7 @@ function decorate(ws) {
 }
 
 function state() {
-  const projects = db.prepare('SELECT * FROM projects ORDER BY sort, created_at').all().map((p) => ({ ...p, has_icon: !!projectIcon(p) }));
+  const projects = db.prepare('SELECT * FROM projects ORDER BY sort, created_at').all().map((p) => ({ ...p, has_icon: !!projectIcon(p), github: githubRepo(p.path) }));
   const workspaces = db.prepare('SELECT * FROM workspaces ORDER BY created_at DESC').all().map(decorate);
   return { projects, workspaces };
 }
@@ -223,6 +223,93 @@ let fullName = null;
 try { fullName = execFileSync('id', ['-F'], { encoding: 'utf8' }).trim(); } catch {}
 app.get('/api/me', (req, res) => res.json({ name: fullName || os.userInfo().username, home: homedir, claude: CLAUDE, hubDir: HUB_DIR, port: PORT }));
 
+// ---------- GitHub: list repos, clone a repo into a new project, link a project ----------
+const SESSIONS_ROOT = path.join(homedir, 'claude sessions');
+const ghRun = (args, opts = {}) => new Promise((ok, ko) => execFile(GH || 'gh', args, { maxBuffer: 20 * 1024 * 1024, timeout: 10 * 60 * 1000, ...opts },
+  (e, out, err) => (e ? ko(new Error((err || e.message).trim().split('\n').pop() || 'gh a échoué')) : ok(out))));
+const REPO_RE = /^(?:https?:\/\/github\.com\/|git@github\.com:)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/;
+const parseRepo = (s) => { const m = REPO_RE.exec(String(s || '').trim()); return m ? `${m[1]}/${m[2]}` : null; };
+
+// Sessions started in a new folder would get an empty Claude auto-memory; share the home one instead.
+function linkClaudeMemory(dir) {
+  const enc = dir.replace(/[^a-zA-Z0-9]/g, '-');
+  const pdir = path.join(homedir, '.claude', 'projects', enc);
+  const home = path.join(homedir, '.claude', 'projects', homedir.replace(/[^a-zA-Z0-9]/g, '-'), 'memory');
+  if (enc.length > 200 || !fs.existsSync(home)) return;
+  fs.mkdirSync(pdir, { recursive: true });
+  if (!fs.existsSync(path.join(pdir, 'memory'))) fs.symlinkSync(path.relative(pdir, home), path.join(pdir, 'memory'));
+}
+
+function insertProject(dir, name) {
+  const count = db.prepare('SELECT COUNT(*) n FROM projects').get().n;
+  const id = uid();
+  db.prepare('INSERT INTO projects (id, name, path, color, sort, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, name, dir, COLORS[count % COLORS.length], count, now());
+  const mem = memoryFile(id);
+  if (!fs.existsSync(mem)) fs.writeFileSync(mem, `# Mémoire — ${name}\n\n`);
+  broadcast({ type: 'reload' });
+  return getProject(id);
+}
+
+app.get('/api/github/owners', wrap(async (req, res) => {
+  const [me, orgs] = await Promise.all([ghRun(['api', 'user', '--jq', '.login']), ghRun(['api', 'user/orgs', '--jq', '.[].login']).catch(() => '')]);
+  res.json([me.trim(), ...orgs.split('\n').filter(Boolean)]);
+}));
+
+app.get('/api/github/repos', wrap(async (req, res) => {
+  const args = ['repo', 'list'];
+  if (req.query.owner && /^[\w.-]+$/.test(req.query.owner)) args.push(String(req.query.owner));
+  args.push('--limit', '200', '--json', 'name,nameWithOwner,description,isPrivate,updatedAt,url');
+  const repos = JSON.parse(await ghRun(args));
+  const cloned = new Set(db.prepare('SELECT path FROM projects').all().map((r) => githubRepo(r.path)).filter(Boolean));
+  res.json(repos.map((r) => ({ ...r, cloned: cloned.has(r.nameWithOwner) })));
+}));
+
+app.post('/api/projects/clone', wrap(async (req, res) => {
+  const repo = parseRepo(req.body.repo);
+  if (!repo) throw new Error('repo invalide : utilise owner/nom ou une URL github.com');
+  const name = String(req.body.name || '').trim() || repo.split('/')[1];
+  let dest = String(req.body.dest || '').trim().replace(/^~(?=\/|$)/, homedir) || path.join(SESSIONS_ROOT, repo.split('/')[1]);
+  dest = path.resolve(dest);
+  if (fs.existsSync(dest) && fs.readdirSync(dest).length) throw new Error(`le dossier existe déjà et n'est pas vide : ${dest}`);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  await ghRun(['repo', 'clone', repo, dest]);
+  dest = fs.realpathSync(dest); // Claude names its folder after the real path (/tmp → /private/tmp)
+  linkClaudeMemory(dest);
+  res.json(insertProject(dest, name));
+}));
+
+// Empty project folder → clone the repo into it. Existing git repo without origin → add it.
+app.post('/api/projects/:id/github', wrap(async (req, res) => {
+  const p = getProject(req.params.id);
+  if (!p) throw new Error('projet introuvable');
+  const repo = parseRepo(req.body.repo);
+  if (!repo) throw new Error('repo invalide : utilise owner/nom ou une URL github.com');
+  if (p.path === homedir) throw new Error("ce projet pointe sur ton dossier perso : donne-lui d'abord son propre dossier");
+  const entries = fs.existsSync(p.path) ? fs.readdirSync(p.path).filter((f) => f !== '.DS_Store') : [];
+  if (!entries.length) {
+    fs.rmSync(path.join(p.path, '.DS_Store'), { force: true });
+    await ghRun(['repo', 'clone', repo, p.path]);
+  } else if (await git.isRepo(p.path)) {
+    if (githubRepo(p.path)) throw new Error(`ce projet est déjà relié à ${githubRepo(p.path)}`);
+    await git.git(p.path, 'remote', 'add', 'origin', `https://github.com/${repo}.git`);
+  } else {
+    throw new Error("le dossier du projet n'est ni vide ni un repo git : impossible d'y cloner sans écraser tes fichiers");
+  }
+  iconCache.delete(p.id);
+  broadcast({ type: 'reload' });
+  res.json({ ...getProject(p.id), github: githubRepo(p.path) });
+}));
+
+app.post('/api/projects/empty', wrap(async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  if (!name || /[/\\:]/.test(name)) throw new Error('nom de projet invalide');
+  const dir = path.join(SESSIONS_ROOT, name);
+  if (fs.existsSync(dir) && fs.readdirSync(dir).length) throw new Error(`le dossier existe déjà et n'est pas vide : ${dir}`);
+  fs.mkdirSync(dir, { recursive: true });
+  linkClaudeMemory(fs.realpathSync(dir));
+  res.json(insertProject(fs.realpathSync(dir), name));
+}));
+
 app.post('/api/projects', wrap(async (req, res) => {
   let p = String(req.body.path || '').trim().replace(/^~(?=\/|$)/, homedir);
   if (!p || !fs.existsSync(p) || !fs.statSync(p).isDirectory()) throw new Error('dossier introuvable');
@@ -286,6 +373,19 @@ function projectIcon(p) {
   if (!iconCache.has(p.id)) iconCache.set(p.id, ICON_CANDIDATES.map((c) => path.join(p.path, c)).find((f) => fs.existsSync(f)) || null);
   return iconCache.get(p.id);
 }
+function githubRepo(dir) {
+  try {
+    let gitDir = path.join(dir, '.git');
+    if (fs.statSync(gitDir).isFile()) gitDir = path.resolve(dir, fs.readFileSync(gitDir, 'utf8').replace(/^gitdir:\s*/, '').trim(), '..', '..');
+    const cfg = fs.readFileSync(path.join(gitDir, 'config'), 'utf8');
+    const m = /\[remote "origin"\][^[]*?url\s*=\s*(\S+)/.exec(cfg);
+    const gh = m && /github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?$/.exec(m[1]);
+    return gh ? `${gh[1]}/${gh[2]}` : null;
+  } catch {
+    return null;
+  }
+}
+
 app.get('/api/projects/:id/icon', (req, res) => {
   const p = getProject(req.params.id);
   const icon = p && projectIcon(p);

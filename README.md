@@ -41,7 +41,10 @@ Supersept tourne tant que le terminal reste ouvert.
 
 ## Utilisation
 
-1. **Ajoute un projet** : bouton dossier à côté de « PROJETS » dans la sidebar. Supersept propose aussi les dossiers où tu as déjà utilisé Claude Code.
+1. **Ajoute un projet** : bouton dossier à côté de « PROJETS » dans la sidebar.
+   - **Ouvrir un dossier** existant (Supersept propose aussi ceux où tu as déjà utilisé Claude Code) ;
+   - **Cloner depuis GitHub** : choisis un de tes repos (ou colle son URL), il est cloné dans `~/claude sessions/<repo>` et devient un projet (nécessite `gh`) ;
+   - **Nouveau projet vide** dans `~/claude sessions/`, que tu pourras relier à GitHub plus tard (clic droit sur le projet → Relier à un repo GitHub).
 2. **Nouvel espace de travail** (⌘N) : décris la tâche, choisis le projet, **Worktree** (branche isolée) ou **Local** (ton dossier), puis le modèle et l'effort.
 3. La première fois dans un nouveau dossier, Claude Code demande si tu fais confiance au dossier : réponds dans le terminal.
 4. Suis tes agents dans la sidebar ou dans **Espaces de travail** (kanban). Clic droit sur un espace pour l'ouvrir dans VS Code ou Cursor, le forker, l'archiver, etc.

@@ -82,7 +82,7 @@ export default function Board({ data, projectsById, go, onContextMenu }) {
         : sort === 'created' ? b.created_at - a.created_at
         : b.updated_at - a.updated_at);
   }, [data.workspaces, q, projects, statuses, sort, archived, projectsById]);
-  const filtered = q || projects.length || statuses.length;
+  const filtered = !!(q || projects.length || statuses.length);
 
   const projectLabel = !projects.length ? 'Dans tous les projets'
     : (projects[0] === '__sessions__' ? 'Sessions' : projectsById[projects[0]]?.name ?? '?') + (projects.length > 1 ? ` +${projects.length - 1}` : '');

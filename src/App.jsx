@@ -122,7 +122,7 @@ export default function App() {
         connected={connected}
         onNew={newWorkspace}
         onNewSession={() => newWorkspace(null)}
-        onAddProject={() => setModal({ type: 'add-project' })}
+        onAddProject={(tab) => setModal({ type: 'add-project', tab })}
         onSearch={() => setModal({ type: 'search' })}
         onCloseWorkspace={(w) => api.patch(`/api/workspaces/${w.id}`, { archived: true })}
         onContextMenu={(ws, e) => setMenu({ ws, x: e.clientX, y: e.clientY })}
@@ -132,10 +132,10 @@ export default function App() {
       />
       <main className="main">{main}</main>
       {modal?.type === 'add-project' && (
-        <AddProject onClose={() => setModal(null)} onAdded={(p) => { setModal(null); load(); }} />
+        <AddProject tab={modal.tab} linkProject={modal.linkProject} onClose={() => setModal(null)} onAdded={() => { setModal(null); load(); }} />
       )}
       {modal?.type === 'search' && <CommandPalette data={data} projectsById={projectsById} go={go} onClose={() => setModal(null)} onNew={() => newWorkspace()} />}
-      {projectMenu && <ProjectMenu {...projectMenu} go={go} onNew={newWorkspace} onClose={() => setProjectMenu(null)} />}
+      {projectMenu && <ProjectMenu {...projectMenu} go={go} onNew={newWorkspace} onLinkGitHub={(p) => setModal({ type: 'add-project', linkProject: p })} onClose={() => setProjectMenu(null)} />}
       {menu && <WorkspaceMenu {...menu} go={go} onFork={fork} onRename={(w) => setRenamingId(w.id)} onClose={() => setMenu(null)} />}
     </div>
   );

@@ -45,6 +45,14 @@ export function ProjectThumbnail({ project, size = 16 }) {
       </span>
     );
   }
+  // Like Superset: a GitHub-linked project shows its owner's avatar.
+  if (project.github && !broken) {
+    return (
+      <span className="thumb img" style={{ width: size, height: size }}>
+        <img src={`https://github.com/${project.github.split('/')[0]}.png?size=${size * 2}`} alt="" onError={() => setBroken(true)} />
+      </span>
+    );
+  }
   return <span className="thumb" style={{ width: size, height: size, fontSize: size <= 16 ? 11 : 12 }}>{project.name.charAt(0).toUpperCase()}</span>;
 }
 

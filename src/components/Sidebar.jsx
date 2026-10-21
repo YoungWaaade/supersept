@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { LuPanelLeft, LuPanelLeftClose, LuPanelLeftOpen, LuArrowLeft, LuArrowRight, LuPlus, LuSearch, LuLayers, LuBrain, LuHistory } from 'react-icons/lu';
 import { HiChevronRight, HiMiniPlus, HiMiniXMark, HiOutlineCog6Tooth } from 'react-icons/hi2';
-import { VscNewFolder, VscFolderOpened, VscListFilter } from 'react-icons/vsc';
+import { VscNewFolder, VscFolderOpened, VscListFilter, VscGithubAlt } from 'react-icons/vsc';
 import { WorkspaceIcon, ProjectThumbnail, DiffStats } from './ui.jsx';
 import { api } from '../api.js';
 
@@ -213,9 +213,7 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
           <SectionHeader label="Projets" closed={closedSections.projects} onToggle={() => setClosedSections({ ...closedSections, projects: !closedSections.projects })}>
             <button className={`sb-iconbtn size-6 ${filtering ? 'on' : ''}`} title="Filtrer" onClick={() => { setFiltering(!filtering); setFilter(''); }}><LuSearch size={14} /></button>
             <SortButton sort={sort} setSort={setSort} />
-            <button className="sb-iconbtn size-6 addrepo" title="Ajouter un projet" onClick={onAddProject}>
-              <VscNewFolder className="i-closed" size={14} /><VscFolderOpened className="i-open" size={14} />
-            </button>
+            <AddRepoButton onPick={onAddProject} />
           </SectionHeader>
           {filtering && (
             <div className="sb-filter">
@@ -278,6 +276,33 @@ function SectionHeader({ label, closed, onToggle, children }) {
       <span className="flex-1" />
       <span className="sb-section-actions" onClick={(e) => e.stopPropagation()}>{children}</span>
     </div>
+  );
+}
+
+// Superset's add-project dropdown: open a folder, clone from GitHub, or start an empty project.
+function AddRepoButton({ onPick }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => !ref.current?.contains(e.target) && setOpen(false);
+    addEventListener('mousedown', close);
+    return () => removeEventListener('mousedown', close);
+  }, [open]);
+  const pick = (tab) => { setOpen(false); onPick(tab); };
+  return (
+    <span className="sb-menu-wrap" ref={ref}>
+      <button className={`sb-iconbtn size-6 addrepo ${open ? 'on' : ''}`} title="Ajouter un projet" onClick={() => setOpen(!open)}>
+        <VscNewFolder className="i-closed" size={14} /><VscFolderOpened className="i-open" size={14} />
+      </button>
+      {open && (
+        <div className="popover sb-add-menu">
+          <button className="popover-item" onClick={() => pick('folder')}><VscFolderOpened size={16} /> Ouvrir un dossier</button>
+          <button className="popover-item" onClick={() => pick('github')}><VscGithubAlt size={16} /> Cloner depuis GitHub</button>
+          <button className="popover-item" onClick={() => pick('empty')}><VscNewFolder size={16} /> Nouveau projet vide</button>
+        </div>
+      )}
+    </span>
   );
 }
 
