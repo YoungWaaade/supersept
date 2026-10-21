@@ -31,7 +31,7 @@ export function WorkspaceIcon({ ws, active }) {
   return (
     <span className={`ws-icon ${active ? 'active' : ''}`}>
       {ws.is_worktree || !ws.project_id ? <RxDot size={16} /> : <CgLaptop size={16} />}
-      <StatusIndicator status={ws.status} className="overlay" />
+      <StatusIndicator status={ws.status} className="corner" />
     </span>
   );
 }

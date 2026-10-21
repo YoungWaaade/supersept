@@ -97,7 +97,7 @@ input, select, textarea { font: inherit; color: var(--foreground); }
 .ws-icon { position: relative; display: inline-flex; color: var(--muted-foreground); opacity: 0.8; }
 .ws-icon.active { opacity: 1; }
 .status-ind { position: relative; display: inline-flex; width: 8px; height: 8px; flex: none; }
-.status-ind.overlay { position: absolute; top: -2px; right: -2px; }
+.status-ind.corner { position: absolute; top: -2px; right: -2px; }
 .status-ind-ping { position: absolute; inset: 0; border-radius: 50%; opacity: 0.75; animation: ping 1s cubic-bezier(0, 0, 0.2, 1) infinite; }
 .status-ind-dot { position: relative; width: 8px; height: 8px; border-radius: 50%; }
 .status-ind.waiting .status-ind-ping { background: var(--yellow-400); }
