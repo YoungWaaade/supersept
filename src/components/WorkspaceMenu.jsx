@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react';
-import { LuExternalLink, LuGitFork, LuCircleCheck, LuArchive, LuArchiveRestore, LuTrash2, LuCopy, LuFolderOpen } from 'react-icons/lu';
+import { LuExternalLink, LuGitFork, LuCircleCheck, LuArchive, LuArchiveRestore, LuTrash2, LuCopy, LuFolderOpen, LuPencil } from 'react-icons/lu';
 import { api } from '../api.js';
 import { deleteWorkspace } from './RightPanel.jsx';
 
 // Right-click menu on a workspace row/card.
-export default function WorkspaceMenu({ ws, x, y, go, onFork, onClose }) {
+export default function WorkspaceMenu({ ws, x, y, go, onFork, onRename, onClose }) {
   const ref = useRef(null);
   useEffect(() => {
     const close = (e) => !ref.current?.contains(e.target) && onClose();
@@ -27,6 +27,7 @@ export default function WorkspaceMenu({ ws, x, y, go, onFork, onClose }) {
       <button className="popover-item" onClick={open('terminal')}><LuExternalLink size={14} /> Ouvrir dans Terminal</button>
       <button className="popover-item" onClick={run(() => navigator.clipboard.writeText(ws.cwd))}><LuCopy size={14} /> Copier le chemin</button>
       <div className="popover-sep" />
+      <button className="popover-item" onClick={run(() => onRename(ws))}><LuPencil size={14} /> Renommer</button>
       <button className="popover-item" onClick={run(() => onFork(ws))} disabled={!ws.has_conversation}><LuGitFork size={14} /> Forker la conversation</button>
       {ws.status !== 'done' && <button className="popover-item" onClick={run(() => api.patch(`/api/workspaces/${ws.id}`, { status: 'done' }))}><LuCircleCheck size={14} /> Marquer comme terminé</button>}
       <button className="popover-item" onClick={run(() => api.patch(`/api/workspaces/${ws.id}`, { archived: !ws.archived }))}>

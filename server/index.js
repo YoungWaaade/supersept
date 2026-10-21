@@ -238,6 +238,16 @@ app.post('/api/projects', wrap(async (req, res) => {
   res.json(getProject(id));
 }));
 
+// Sidebar order of projects: body.ids is the full list in display order.
+app.post('/api/projects/order', wrap(async (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+  const set = db.prepare('UPDATE projects SET sort = ? WHERE id = ?');
+  db.exec('BEGIN');
+  try { ids.forEach((id, i) => set.run(i, String(id))); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; }
+  broadcast({ type: 'reload' });
+  res.json({ ok: true });
+}));
+
 app.patch('/api/projects/:id', wrap(async (req, res) => {
   const p = getProject(req.params.id);
   if (!p) throw new Error('projet introuvable');

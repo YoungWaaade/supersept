@@ -6,6 +6,7 @@ import { WorkspaceIcon, ProjectThumbnail, DiffStats } from './ui.jsx';
 import { api } from '../api.js';
 
 const DND_TYPE = 'application/x-supersept-workspace';
+const DND_PROJECT = 'application/x-supersept-project';
 
 const DEFAULT_WIDTH = 271;
 const MIN_WIDTH = 220;
@@ -29,7 +30,7 @@ const persisted = (key, init) => {
   try { return JSON.parse(localStorage.getItem(key)) ?? init; } catch { return init; }
 };
 
-export default function Sidebar({ data, route, go, connected, me, onNew, onNewSession, onAddProject, onSearch, onCloseWorkspace, onContextMenu, onProjectMenu }) {
+export default function Sidebar({ data, route, go, connected, me, onNew, onNewSession, onAddProject, onSearch, onCloseWorkspace, onContextMenu, onProjectMenu, renamingId, setRenamingId }) {
   const [width, setWidth] = useState(() => persisted('sb-width', DEFAULT_WIDTH));
   const [collapsed, setCollapsed] = useState(() => persisted('sb-collapsed', false));
   const [closedProjects, setClosedProjects] = useState(() => persisted('sb-closed-projects', {}));
@@ -50,7 +51,11 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
   const matches = (w) => !q || w.name.toLowerCase().includes(q) || (w.branch || '').toLowerCase().includes(q);
   const sessions = visible.filter((w) => !w.project_id && matches(w));
   const lastActivity = (p) => Math.max(p.created_at, ...visible.filter((w) => w.project_id === p.id).map((w) => w.updated_at));
-  const projects = [...data.projects]
+  // Optimistic order while the server saves a drag-reorder.
+  const [localOrder, setLocalOrder] = useState(null);
+  useEffect(() => setLocalOrder(null), [data.projects]);
+  const ordered = localOrder ? localOrder.map((id) => data.projects.find((p) => p.id === id)).filter(Boolean) : data.projects;
+  const projects = [...ordered]
     .sort((a, b) => (sort === 'name' ? a.name.localeCompare(b.name) : sort === 'recent' ? lastActivity(b) - lastActivity(a) : 0))
     .filter((p) => !q || p.name.toLowerCase().includes(q) || visible.some((w) => w.project_id === p.id && matches(w)));
 
@@ -61,17 +66,61 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
   const [dragId, setDragId] = useState(null);
   const [dropTarget, setDropTarget] = useState(null); // project id, or '__sessions__'
   const dragged = data.workspaces.find((w) => w.id === dragId);
+  // Drag a project row above/below another to reorder (switches the sort to manual).
+  const [projDrag, setProjDrag] = useState(null);
+  const [projDrop, setProjDrop] = useState(null); // { id, pos: 'before' | 'after' }
+  const projectDragProps = (p) => ({
+    draggable: true,
+    onDragStart: (e) => {
+      e.dataTransfer.setData(DND_PROJECT, p.id);
+      e.dataTransfer.effectAllowed = 'move';
+      setProjDrag(p.id);
+    },
+    onDragEnd: () => { setProjDrag(null); setProjDrop(null); },
+  });
+  const reorder = (dragIdP, overId, pos) => {
+    const ids = projects.map((p) => p.id).filter((id) => id !== dragIdP);
+    const at = ids.indexOf(overId) + (pos === 'after' ? 1 : 0);
+    ids.splice(at, 0, dragIdP);
+    // Keep projects hidden by the filter in their place at the end.
+    const all = [...ids, ...data.projects.map((p) => p.id).filter((id) => !ids.includes(id))];
+    setSort('manual');
+    setLocalOrder(all);
+    api.post('/api/projects/order', { ids: all }).catch((err) => { setLocalOrder(null); alert(err.message); });
+  };
+
   const dropProps = (target) => ({
     onDragOver: (e) => {
+      if (e.dataTransfer.types.includes(DND_PROJECT)) {
+        if (target === '__sessions__' || target === projDrag) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const r = e.currentTarget.getBoundingClientRect();
+        const pos = e.clientY < r.top + r.height / 2 ? 'before' : 'after';
+        if (projDrop?.id !== target || projDrop?.pos !== pos) setProjDrop({ id: target, pos });
+        return;
+      }
       if (!e.dataTransfer.types.includes(DND_TYPE)) return;
       if ((dragged?.project_id ?? '__sessions__') === target) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       if (dropTarget !== target) setDropTarget(target);
     },
-    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDropTarget((t) => (t === target ? null : t)); },
+    onDragLeave: (e) => {
+      if (e.currentTarget.contains(e.relatedTarget)) return;
+      setDropTarget((t) => (t === target ? null : t));
+      setProjDrop((d) => (d?.id === target ? null : d));
+    },
     onDrop: (e) => {
       e.preventDefault();
+      const pid = e.dataTransfer.getData(DND_PROJECT);
+      if (pid) {
+        const pos = projDrop?.id === target ? projDrop.pos : 'before';
+        setProjDrop(null);
+        setProjDrag(null);
+        if (pid !== target && target !== '__sessions__') reorder(pid, target, pos);
+        return;
+      }
       const id = e.dataTransfer.getData(DND_TYPE);
       setDropTarget(null);
       setDragId(null);
@@ -95,7 +144,7 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
   });
 
   const row = (w) => (
-    <WorkspaceRow key={w.id} ws={w} active={activeWs === w.id} shortcut={shortcut.get(w.id)} dragging={dragId === w.id} dragProps={dragProps(w)} onClick={() => go({ kind: 'ws', id: w.id })} onClose={() => onCloseWorkspace(w)} onContextMenu={(e) => { e.preventDefault(); onContextMenu(w, e); }} />
+    <WorkspaceRow key={w.id} ws={w} active={activeWs === w.id} shortcut={shortcut.get(w.id)} dragging={dragId === w.id} dragProps={dragProps(w)} renaming={renamingId === w.id} onRename={() => setRenamingId(w.id)} onRenameDone={() => setRenamingId(null)} onClick={() => go({ kind: 'ws', id: w.id })} onClose={() => onCloseWorkspace(w)} onContextMenu={(e) => { e.preventDefault(); onContextMenu(w, e); }} />
   );
 
   if (collapsed) {
@@ -178,8 +227,8 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
             const list = visible.filter((w) => w.project_id === p.id && (matches(w) || p.name.toLowerCase().includes(q)));
             const open = !closedProjects[p.id] || !!q;
             return (
-              <div className={`sb-project ${dropTarget === p.id ? 'drop' : ''}`} key={p.id} {...dropProps(p.id)}>
-                <div className="sb-project-row" role="button"
+              <div className={`sb-project ${dropTarget === p.id ? 'drop' : ''} ${projDrop?.id === p.id ? `reorder-${projDrop.pos}` : ''} ${projDrag === p.id ? 'dragging' : ''}`} key={p.id} {...dropProps(p.id)}>
+                <div className="sb-project-row" role="button" {...projectDragProps(p)}
                   onClick={() => setClosedProjects({ ...closedProjects, [p.id]: !closedProjects[p.id] })}
                   onContextMenu={(e) => { e.preventDefault(); onProjectMenu(p, e); }}>
                   <div className="sb-project-main">
@@ -255,15 +304,35 @@ function SortButton({ sort, setSort }) {
   );
 }
 
-function WorkspaceRow({ ws, active, shortcut, onClick, onClose, onContextMenu, dragging, dragProps }) {
+function WorkspaceRow({ ws, active, shortcut, onClick, onClose, onContextMenu, dragging, dragProps, renaming, onRename, onRenameDone }) {
+  const input = useRef(null);
+  const openedAt = useRef(0);
+  useEffect(() => {
+    if (!renaming) return;
+    openedAt.current = Date.now();
+    // Opening a row also focuses its terminal right after: take the focus back.
+    const t = [0, 60, 150].map((d) => setTimeout(() => { input.current?.focus(); if (d === 0) input.current?.select(); }, d));
+    return () => t.forEach(clearTimeout);
+  }, [renaming]);
+  const save = () => {
+    const name = input.current?.value.trim();
+    onRenameDone();
+    if (name && name !== ws.name) api.patch(`/api/workspaces/${ws.id}`, { name }).catch((e) => alert(e.message));
+  };
   const ref = useRef(null);
   useEffect(() => { if (active) ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, [active]);
   return (
-    <div ref={ref} className={`sb-ws ${active ? 'active' : ''} ${dragging ? 'dragging' : ''}`} {...dragProps}>
+    <div ref={ref} className={`sb-ws ${active ? 'active' : ''} ${dragging ? 'dragging' : ''}`} {...dragProps} draggable={!renaming}>
       <div className="sb-ws-inner" role="button" onClick={onClick} onContextMenu={onContextMenu} title={ws.cwd}>
         <span className="sb-ws-icon"><WorkspaceIcon ws={ws} active={active} /></span>
         <div className="sb-ws-grid">
-          <span className="sb-ws-name fade-r">{ws.name || ws.branch}</span>
+          {renaming ? (
+            <input ref={input} className="sb-ws-rename" defaultValue={ws.name}
+              onClick={(e) => e.stopPropagation()} onBlur={() => (Date.now() - openedAt.current < 400 ? input.current?.focus() : save())}
+              onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') save(); if (e.key === 'Escape') onRenameDone(); }} />
+          ) : (
+            <span className="sb-ws-name fade-r" onDoubleClick={(e) => { e.stopPropagation(); onRename(); }} title="Double-clic pour renommer">{ws.name || ws.branch}</span>
+          )}
           <span className="sb-ws-right">
             {active && <DiffStats stats={ws.stats} active />}
             <span className="sb-ws-hover">

@@ -24,6 +24,7 @@ export default function App() {
   const [modal, setModal] = useState(null);
   const [menu, setMenu] = useState(null); // { ws, x, y }
   const [projectMenu, setProjectMenu] = useState(null); // { project, x, y }
+  const [renamingId, setRenamingId] = useState(null);
   const [connected, setConnected] = useState(false);
   const [rightOpen, setRightOpen] = useState(() => localStorage.getItem('rp-open') === '1');
   const routeRef = useRef(route);
@@ -126,6 +127,8 @@ export default function App() {
         onCloseWorkspace={(w) => api.patch(`/api/workspaces/${w.id}`, { archived: true })}
         onContextMenu={(ws, e) => setMenu({ ws, x: e.clientX, y: e.clientY })}
         onProjectMenu={(project, e) => setProjectMenu({ project, x: e.clientX, y: e.clientY })}
+        renamingId={renamingId}
+        setRenamingId={setRenamingId}
       />
       <main className="main">{main}</main>
       {modal?.type === 'add-project' && (
@@ -133,7 +136,7 @@ export default function App() {
       )}
       {modal?.type === 'search' && <CommandPalette data={data} projectsById={projectsById} go={go} onClose={() => setModal(null)} onNew={() => newWorkspace()} />}
       {projectMenu && <ProjectMenu {...projectMenu} go={go} onNew={newWorkspace} onClose={() => setProjectMenu(null)} />}
-      {menu && <WorkspaceMenu {...menu} go={go} onFork={fork} onClose={() => setMenu(null)} />}
+      {menu && <WorkspaceMenu {...menu} go={go} onFork={fork} onRename={(w) => setRenamingId(w.id)} onClose={() => setMenu(null)} />}
     </div>
   );
 }
