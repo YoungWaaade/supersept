@@ -179,7 +179,7 @@ function ensureSession(key) {
 const app = express();
 app.use(express.json({ limit: '5mb' }));
 
-const ORIGINS = new Set([`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`, 'http://localhost:5173', 'http://127.0.0.1:5173']);
+const ORIGINS = new Set([`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`, `http://supersept.localhost:${PORT}`, 'http://localhost:5173', 'http://127.0.0.1:5173']);
 const allowedOrigin = (o) => !o || ORIGINS.has(o);
 app.use((req, res, next) => {
   // Refuse cross-site requests: this server can spawn processes.
