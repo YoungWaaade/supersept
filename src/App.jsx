@@ -66,7 +66,7 @@ export default function App() {
   }, [load]);
 
   const attention = data.workspaces.filter((w) => !w.archived && (w.status === 'review' || w.status === 'waiting')).length;
-  useEffect(() => { document.title = attention ? `(${attention}) Claude Hub` : 'Claude Hub'; }, [attention]);
+  useEffect(() => { document.title = attention ? `(${attention}) Supersept` : 'Supersept'; }, [attention]);
 
   const go = (r) => { location.hash = r.id ? `#/${r.kind}/${r.id}` : `#/${r.kind}`; };
   const current = route.kind === 'ws' ? data.workspaces.find((w) => w.id === route.id) : null;

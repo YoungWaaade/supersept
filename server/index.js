@@ -113,8 +113,8 @@ function systemPrompt(ws, project) {
   const content = fs.existsSync(mem) ? fs.readFileSync(mem, 'utf8').trim() : '';
   return [
     project
-      ? `Tu tournes dans Claude Hub, workspace "${ws.name}" du projet "${project.name}" (${project.path}).`
-      : `Tu tournes dans Claude Hub, session libre "${ws.name}" (hors projet) dans ${ws.cwd}.`,
+      ? `Tu tournes dans Supersept, workspace "${ws.name}" du projet "${project.name}" (${project.path}).`
+      : `Tu tournes dans Supersept, session libre "${ws.name}" (hors projet) dans ${ws.cwd}.`,
     ws.is_worktree ? `Ce workspace est un git worktree isolé sur la branche "${ws.branch}" (base: ${ws.base_branch}). Ne travaille que dans ${ws.cwd}.` : '',
     `Mémoire persistante ${project ? 'du projet' : 'des sessions libres'} : ${mem}`,
     `Elle est partagée entre toutes les sessions ${project ? 'de ce projet' : 'libres'}. Quand tu apprends quelque chose de durable (décisions, conventions, commandes utiles, état d'avancement, pièges), mets-la à jour de façon concise (puces courtes, sections par thème). N'y mets rien d'éphémère.`,
@@ -625,4 +625,4 @@ setInterval(() => {
 db.prepare("UPDATE workspaces SET status = 'idle' WHERE status IN ('working', 'waiting')").run();
 for (const { id } of db.prepare('SELECT id FROM workspaces WHERE archived = 0').all()) refreshStats(id);
 
-server.listen(PORT, HOST, () => console.log(`Claude Hub → http://localhost:${PORT}`));
+server.listen(PORT, HOST, () => console.log(`Supersept → http://localhost:${PORT}`));

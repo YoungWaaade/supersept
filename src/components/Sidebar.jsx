@@ -162,7 +162,7 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
         <footer className="sb-footer">
           <button className="sb-account" onClick={() => go({ kind: 'settings' })}>
             <span className="sb-avatar">{initials(me?.name)}</span>
-            <span className="sb-account-name">{me?.name || 'Claude Hub'}</span>
+            <span className="sb-account-name">{me?.name || 'Supersept'}</span>
           </button>
           <span className={`sb-pill ${connected ? '' : 'error'}`} title={connected ? 'Serveur local connecté — les sessions tournent' : 'Serveur local injoignable'}>
             {connected ? <span className="sb-pill-dot" /> : null}
@@ -177,7 +177,7 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
 }
 
 function initials(name) {
-  const words = (name || 'Claude Hub').trim().split(/\s+/);
+  const words = (name || 'Supersept').trim().split(/\s+/);
   return ((words[0]?.[0] || '') + (words.length > 1 ? words[words.length - 1][0] : '')).toUpperCase();
 }
 

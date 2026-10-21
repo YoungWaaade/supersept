@@ -16,20 +16,20 @@ const PLACEHOLDERS = [
 ];
 const SUGGESTIONS = [
   ['Explique-moi comment fonctionne ce repo', 'Explique-moi comment fonctionne ce repository : son architecture, ses points d\'entrée, comment le lancer et le tester. Ajoute l\'essentiel à la mémoire du projet.'],
-  ['Mettre à jour la mémoire du projet', 'Parcours le projet et mets à jour la mémoire du projet (Claude Hub) avec les conventions, commandes utiles et décisions importantes que tu trouves. Reste concis.'],
+  ['Mettre à jour la mémoire du projet', 'Parcours le projet et mets à jour la mémoire du projet (Supersept) avec les conventions, commandes utiles et décisions importantes que tu trouves. Reste concis.'],
   ['Trouve un petit bug et corrige-le', 'Trouve un petit bug dans cette codebase et corrige-le. Explique ce que tu as trouvé et comment tu l\'as vérifié.'],
 ];
 const MODELS = [['', 'Modèle par défaut'], ['fable', 'Fable'], ['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku']];
 const EFFORTS = [['', 'Effort par défaut'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'xHigh'], ['max', 'Max']];
 
-// Own pixel mark in Superset's style: "[CH]" on a 15×6 grid.
+// Own pixel mark in Superset's style: "[SP]" on a 15×6 grid.
 const MARK = [
-  'XX..XX.X.X..XX.',
+  'XX..XX.XX...XX.',
   'X..X...X.X...X.',
-  'X..X...XXX...X.',
-  'X..X...XXX...X.',
-  'X..X...X.X...X.',
-  'XX..XX.X.X..XX.',
+  'X...X..XX....X.',
+  'X....X.X.....X.',
+  'X....X.X.....X.',
+  'XX.XX..X....XX.',
 ];
 function PixelMark() {
   const cell = 9.0909;
