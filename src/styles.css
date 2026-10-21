@@ -537,7 +537,8 @@ body.resizing { user-select: none; cursor: col-resize; }
 .wsp-create { height: 32px; padding: 0 12px; border-radius: 8px; background: var(--foreground); color: var(--background); font-size: 14px; line-height: 20px; font-weight: 500; transition: background-color 150ms; }
 .wsp-create:hover { background: #d5d3d1; }
 .wsp-toolbar { display: flex; align-items: center; gap: 8px; height: 32px; margin: 0 0 8px; padding: 0 23px 0 24px; }
-.wsp-search { display: flex; align-items: center; gap: 8px; width: 200px; color: var(--muted-foreground); }
+/* largeur du placeholder français complet, rétrécit si la barre manque de place */
+.wsp-search { display: flex; align-items: center; gap: 8px; width: 280px; min-width: 160px; flex: 0 1 auto; color: var(--muted-foreground); }
 .wsp-search input { flex: 1; min-width: 0; border: 0; background: none; outline: none; font-size: 14px; line-height: 20px; }
 .wsp-search input::placeholder { color: var(--muted-foreground); }
 .wsp-ghost { gap: 6px; height: 32px; padding: 0 10px; border-radius: 8px; font-size: 14px; line-height: 20px; color: var(--muted-foreground); white-space: nowrap; transition: all 150ms; }
@@ -564,8 +565,9 @@ body.resizing { user-select: none; cursor: col-resize; }
 .bsi.review { color: var(--emerald-500); }
 .bsi-slot { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; }
 .kb-scroll { flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; }
-.kb { display: flex; height: 100%; min-width: max-content; padding: 16px 24px; gap: 12px; }
-.kb-col { display: flex; flex-direction: column; width: 280px; min-width: 280px; flex: none; padding: 8px 8px 0; border-radius: 10px; background: rgba(234, 232, 230, 0.04); overflow: hidden; }
+/* colonnes réparties sur toute la largeur : le tableau s'aligne sur les bords de la barre d'outils */
+.kb { display: flex; height: 100%; width: max-content; min-width: 100%; padding: 16px 24px; gap: 12px; }
+.kb-col { display: flex; flex-direction: column; width: 280px; min-width: 260px; flex: 1 1 280px; padding: 8px 8px 0; border-radius: 10px; background: rgba(234, 232, 230, 0.04); overflow: hidden; }
 .kb-col-head { display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 6px; margin-bottom: 6px; flex: none; }
 .kb-col-head .bsi-slot { width: 16px; }
 .kb-col-label { font-size: 14px; line-height: 20px; font-weight: 500; color: var(--foreground); white-space: nowrap; }

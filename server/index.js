@@ -252,7 +252,15 @@ app.patch('/api/projects/:id', wrap(async (req, res) => {
   const p = getProject(req.params.id);
   if (!p) throw new Error('projet introuvable');
   const run = req.body.run_command === undefined ? p.run_command : String(req.body.run_command).trim() || null;
-  db.prepare('UPDATE projects SET name = ?, color = ?, run_command = ? WHERE id = ?').run(req.body.name ?? p.name, req.body.color ?? p.color, run, p.id);
+  // Changing the folder only affects new workspaces; existing ones keep their own cwd (needed to resume).
+  let dir = p.path;
+  if (req.body.path !== undefined) {
+    dir = String(req.body.path).trim().replace(/^~(?=\/|$)/, homedir);
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error('dossier introuvable');
+    dir = fs.realpathSync(dir);
+    iconCache.delete(p.id);
+  }
+  db.prepare('UPDATE projects SET name = ?, color = ?, run_command = ?, path = ? WHERE id = ?').run(req.body.name ?? p.name, req.body.color ?? p.color, run, dir, p.id);
   broadcast({ type: 'reload' });
   res.json(getProject(p.id));
 }));
