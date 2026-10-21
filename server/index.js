@@ -125,11 +125,33 @@ function systemPrompt(ws, project) {
 // Workspaces whose next launch must fork the resumed conversation instead of continuing it.
 const forkPending = new Set();
 
+// Claude Code records live sessions in ~/.claude/sessions/<pid>.json. Two processes on one
+// conversation would interleave its transcript, so refuse to resume one still open elsewhere.
+function externalHolder(sessionId) {
+  const dir = path.join(homedir, '.claude', 'sessions');
+  const ours = new Set([...sessions.values()].filter((s) => s.alive).map((s) => s.proc.pid));
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => /^\d+\.json$/.test(f)); } catch {}
+  for (const f of files) {
+    try {
+      const info = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+      if (info.sessionId !== sessionId || ours.has(info.pid)) continue;
+      process.kill(info.pid, 0); // throws if the process is gone
+      return info.pid;
+    } catch {}
+  }
+  return null;
+}
+
 function startAgent(wsId) {
   const ws = getWorkspace(wsId) && { ...getWorkspace(wsId), fork_pending: forkPending.delete(wsId) };
   if (!ws) throw new Error('workspace introuvable');
   const project = ws.project_id ? getProject(ws.project_id) : null;
   if (!fs.existsSync(ws.cwd)) throw new Error(`dossier introuvable : ${ws.cwd}`);
+  if (ws.has_conversation) {
+    const pid = externalHolder(ws.session_id);
+    if (pid) throw Object.assign(new Error(`Cette conversation est encore ouverte dans un autre terminal (process ${pid}, par exemple un onglet iTerm).\r\nFerme-la là-bas : elle reprendra ici automatiquement.`), { busy: true });
+  }
   const args = ['--settings', hookSettings(ws.id), '--add-dir', MEMORY_DIR, '--append-system-prompt', systemPrompt(ws, project), '-n', ws.name];
   if (ws.model) args.push('--model', ws.model);
   if (ws.effort) args.push('--effort', ws.effort);
@@ -199,7 +221,7 @@ app.post('/api/projects', wrap(async (req, res) => {
   let p = String(req.body.path || '').trim().replace(/^~(?=\/|$)/, homedir);
   if (!p || !fs.existsSync(p) || !fs.statSync(p).isDirectory()) throw new Error('dossier introuvable');
   p = fs.realpathSync(p);
-  if (db.prepare('SELECT 1 FROM projects WHERE path = ?').get(p)) throw new Error('projet déjà ajouté');
+  if (!req.body.force && db.prepare('SELECT 1 FROM projects WHERE path = ?').get(p)) throw new Error('ce dossier a déjà un projet');
   const count = db.prepare('SELECT COUNT(*) n FROM projects').get().n;
   const id = uid();
   db.prepare('INSERT INTO projects (id, name, path, color, sort, created_at) VALUES (?, ?, ?, ?, ?, ?)')
@@ -373,7 +395,7 @@ app.post('/api/workspaces', wrap(async (req, res) => {
   );
   logEvent(id, 'created', name);
   if (req.body.forkFrom) forkPending.add(id);
-  startAgent(id);
+  if (req.body.start !== false) startAgent(id);
   refreshStats(id);
   res.json(decorate(getWorkspace(id)));
 }));
@@ -590,7 +612,8 @@ wss.on('connection', (ws, req) => {
   try {
     s = ensureSession(key);
   } catch (e) {
-    ws.send(JSON.stringify({ type: 'output', data: `\x1b[31m${e.message}\x1b[0m\r\n` }));
+    // Replace the screen (the client retries every 2s) instead of stacking error lines.
+    ws.send(JSON.stringify({ type: 'reset', alive: false, data: `\x1b[${e.busy ? '33' : '31'}m${e.message}\x1b[0m\r\n` }));
     return ws.close();
   }
   if (!s) return ws.close();

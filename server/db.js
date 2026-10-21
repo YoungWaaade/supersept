@@ -15,7 +15,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    path TEXT NOT NULL UNIQUE,
+    path TEXT NOT NULL,
     color TEXT NOT NULL,
     sort INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
@@ -78,6 +78,31 @@ if (projectCol?.nn) {
   `);
 }
 db.exec('PRAGMA foreign_keys = ON');
+
+// v3: several projects may share a folder (a project is a topic, e.g. several Figma tasks run from ~).
+const projectsSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'projects'").get()?.sql || '';
+if (/path TEXT NOT NULL UNIQUE/.test(projectsSql)) {
+  const cols = db.prepare("SELECT name FROM pragma_table_info('projects')").all().map((c) => c.name).join(', ');
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    PRAGMA legacy_alter_table = ON;
+    BEGIN;
+    ALTER TABLE projects RENAME TO projects_old;
+    CREATE TABLE projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      path TEXT NOT NULL,
+      color TEXT NOT NULL,
+      sort INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL${cols.includes('run_command') ? ',\n      run_command TEXT' : ''}
+    );
+    INSERT INTO projects (${cols}) SELECT ${cols} FROM projects_old;
+    DROP TABLE projects_old;
+    COMMIT;
+    PRAGMA legacy_alter_table = OFF;
+    PRAGMA foreign_keys = ON;
+  `);
+}
 
 // Additive migrations.
 const addColumn = (table, col, type) => {
