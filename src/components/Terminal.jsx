@@ -1,17 +1,22 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { wsUrl } from '../api.js';
 
+// Superset's built-in "ember" dark theme.
 const THEME = {
-  background: '#0c0c0e',
-  foreground: '#e4e4e7',
-  cursor: '#e4e4e7',
-  selectionBackground: '#3b3f5c',
-  black: '#1c1c21', red: '#ff6b6b', green: '#4fd1a5', yellow: '#f6c84d', blue: '#7c8cff', magenta: '#c792ea', cyan: '#5ec8f2', white: '#d4d4d8',
-  brightBlack: '#5c5c66', brightRed: '#ff8787', brightGreen: '#6ee7b7', brightYellow: '#fde68a', brightBlue: '#a5b4fc', brightMagenta: '#e0aaff', brightCyan: '#93e1ff', brightWhite: '#fafafa',
+  background: '#151110',
+  foreground: '#eae8e6',
+  cursor: '#e07850',
+  cursorAccent: '#151110',
+  selectionBackground: 'rgba(224,120,80,0.25)',
+  black: '#151110', red: '#dc6b6b', green: '#7ec699', yellow: '#e5c07b', blue: '#61afef', magenta: '#c678dd', cyan: '#56b6c2', white: '#eae8e6',
+  brightBlack: '#5c5856', brightRed: '#e88888', brightGreen: '#98d1a8', brightYellow: '#ecd08f', brightBlue: '#7ec0f5', brightMagenta: '#d494e6', brightCyan: '#73c7d3', brightWhite: '#ffffff',
 };
+const FONT = '"JetBrains Mono", "JetBrainsMono Nerd Font", "MesloLGM Nerd Font", "MesloLGM NF", "MesloLGS NF", "MesloLGS Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", "CaskaydiaCove Nerd Font", "Menlo", "Monaco", "Courier New", monospace';
 
 // Terminals outlive the component that shows them, so switching workspace keeps scrollback and the socket.
 const pool = new Map();
@@ -20,19 +25,31 @@ function create(key) {
   const el = document.createElement('div');
   el.className = 'xterm-host';
   const term = new XTerm({
-    fontFamily: '"JetBrains Mono", "SF Mono", Menlo, monospace',
-    fontSize: 13,
-    lineHeight: 1.15,
+    fontFamily: FONT,
+    fontSize: 14,
+    lineHeight: 1,
+    letterSpacing: 0,
+    fontWeight: 'normal',
+    minimumContrastRatio: 1,
+    cursorStyle: 'block',
     cursorBlink: true,
+    cursorInactiveStyle: 'outline',
     allowProposedApi: true,
-    scrollback: 20000,
-    macOptionIsMeta: true,
+    scrollback: 10000,
+    macOptionIsMeta: false,
     theme: THEME,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon((e, uri) => open(uri, '_blank')));
+  const unicode = new Unicode11Addon();
+  term.loadAddon(unicode);
+  term.unicode.activeVersion = '11';
   const entry = { key, el, term, fit, sock: null, opened: false, onExit: new Set() };
+  term.onTitleChange((t) => {
+    titles.set(key, t);
+    titleSubs.get(key)?.forEach((f) => f(t));
+  });
 
   const send = (m) => entry.sock?.readyState === 1 && entry.sock.send(JSON.stringify(m));
   entry.send = send;
@@ -74,6 +91,34 @@ function create(key) {
   return entry;
 }
 
+// OSC window titles set by the program (Claude Code sets e.g. "✳ Fix login").
+const titles = new Map();
+const titleSubs = new Map();
+
+export function useTerminalTitle(key) {
+  const [title, setTitle] = useState(() => titles.get(key) || '');
+  useEffect(() => {
+    setTitle(titles.get(key) || '');
+    if (!titleSubs.has(key)) titleSubs.set(key, new Set());
+    titleSubs.get(key).add(setTitle);
+    return () => titleSubs.get(key)?.delete(setTitle);
+  }, [key]);
+  return title;
+}
+
+export function killTerminal(key) {
+  const e = pool.get(key);
+  if (!e) return;
+  e.send({ type: 'kill' });
+  pool.delete(key);
+  clearTimeout(e.retry);
+  setTimeout(() => { e.sock?.close(); e.term.dispose(); }, 50);
+}
+
+export function focusTerminal(key) {
+  pool.get(key)?.term.focus();
+}
+
 export function restartTerminal(key) {
   pool.get(key)?.send({ type: 'restart' });
 }
@@ -96,6 +141,11 @@ export default function Terminal({ termKey, active = true }) {
     if (!entry.opened) {
       entry.term.open(entry.el);
       entry.opened = true;
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => webgl.dispose());
+        entry.term.loadAddon(webgl);
+      } catch {}
       entry.fit.fit();
       entry.connect();
     }

@@ -4,9 +4,10 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { db, HOOKS_DIR, WORKTREES_DIR, MEMORY_DIR, memoryFile } from './db.js';
+import { db, HUB_DIR, HOOKS_DIR, WORKTREES_DIR, MEMORY_DIR, memoryFile } from './db.js';
 import * as git from './git.js';
 import { listSessions, lastAssistantText } from './history.js';
 import { sessions, spawn, spawnShell, killWorkspace, which, homedir } from './pty.js';
@@ -45,7 +46,7 @@ function decorate(ws) {
 }
 
 function state() {
-  const projects = db.prepare('SELECT * FROM projects ORDER BY sort, created_at').all();
+  const projects = db.prepare('SELECT * FROM projects ORDER BY sort, created_at').all().map((p) => ({ ...p, has_icon: !!projectIcon(p) }));
   const workspaces = db.prepare('SELECT * FROM workspaces ORDER BY created_at DESC').all().map(decorate);
   return { projects, workspaces };
 }
@@ -102,25 +103,36 @@ function hookSettings(wsId) {
   return file;
 }
 
+// Sessions outside any project share one memory file.
+const SESSIONS_MEMORY_ID = 'sessions';
+
 function systemPrompt(ws, project) {
-  const mem = memoryFile(project.id);
+  const mem = memoryFile(project?.id ?? SESSIONS_MEMORY_ID);
   const content = fs.existsSync(mem) ? fs.readFileSync(mem, 'utf8').trim() : '';
   return [
-    `Tu tournes dans Claude Hub, workspace "${ws.name}" du projet "${project.name}" (${project.path}).`,
+    project
+      ? `Tu tournes dans Claude Hub, workspace "${ws.name}" du projet "${project.name}" (${project.path}).`
+      : `Tu tournes dans Claude Hub, session libre "${ws.name}" (hors projet) dans ${ws.cwd}.`,
     ws.is_worktree ? `Ce workspace est un git worktree isolé sur la branche "${ws.branch}" (base: ${ws.base_branch}). Ne travaille que dans ${ws.cwd}.` : '',
-    `Mémoire persistante du projet : ${mem}`,
-    `Elle est partagée entre toutes les sessions de ce projet. Quand tu apprends quelque chose de durable (décisions, conventions, commandes utiles, état d'avancement, pièges), mets-la à jour de façon concise (puces courtes, sections par thème). N'y mets rien d'éphémère.`,
+    `Mémoire persistante ${project ? 'du projet' : 'des sessions libres'} : ${mem}`,
+    `Elle est partagée entre toutes les sessions ${project ? 'de ce projet' : 'libres'}. Quand tu apprends quelque chose de durable (décisions, conventions, commandes utiles, état d'avancement, pièges), mets-la à jour de façon concise (puces courtes, sections par thème). N'y mets rien d'éphémère.`,
     content ? `--- Contenu actuel de la mémoire ---\n${content}\n--- fin ---` : 'La mémoire est vide pour l\'instant.',
   ].filter(Boolean).join('\n');
 }
 
+// Workspaces whose next launch must fork the resumed conversation instead of continuing it.
+const forkPending = new Set();
+
 function startAgent(wsId) {
-  const ws = getWorkspace(wsId);
-  const project = ws && getProject(ws.project_id);
-  if (!ws || !project) throw new Error('workspace introuvable');
+  const ws = getWorkspace(wsId) && { ...getWorkspace(wsId), fork_pending: forkPending.delete(wsId) };
+  if (!ws) throw new Error('workspace introuvable');
+  const project = ws.project_id ? getProject(ws.project_id) : null;
   if (!fs.existsSync(ws.cwd)) throw new Error(`dossier introuvable : ${ws.cwd}`);
   const args = ['--settings', hookSettings(ws.id), '--add-dir', MEMORY_DIR, '--append-system-prompt', systemPrompt(ws, project), '-n', ws.name];
-  if (ws.has_conversation) args.push('--resume', ws.session_id);
+  if (ws.has_conversation) {
+    args.push('--resume', ws.session_id);
+    if (ws.fork_pending) args.push('--fork-session');
+  }
   else {
     args.push('--session-id', ws.session_id);
     if (ws.initial_prompt) args.push(ws.initial_prompt);
@@ -143,7 +155,7 @@ function ensureSession(key) {
   const ws = getWorkspace(wsId);
   if (!ws) return null;
   if (kind === 'agent') return startAgent(wsId);
-  if (kind === 'shell') return spawnShell(key, ws.cwd);
+  if (/^shell(-[\w]+)?$/.test(kind)) return spawnShell(key, ws.cwd);
   return null;
 }
 
@@ -162,6 +174,10 @@ app.use((req, res, next) => {
 const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => res.status(400).json({ error: e.message }));
 
 app.get('/api/state', (req, res) => res.json(state()));
+
+let fullName = null;
+try { fullName = execFileSync('id', ['-F'], { encoding: 'utf8' }).trim(); } catch {}
+app.get('/api/me', (req, res) => res.json({ name: fullName || os.userInfo().username, home: homedir, claude: CLAUDE, hubDir: HUB_DIR, port: PORT }));
 
 app.post('/api/projects', wrap(async (req, res) => {
   let p = String(req.body.path || '').trim().replace(/^~(?=\/|$)/, homedir);
@@ -200,6 +216,22 @@ app.get('/api/projects/:id/info', wrap(async (req, res) => {
   res.json({ repo, branch: repo ? await git.currentBranch(p.path) : null, branches: repo ? await git.branches(p.path) : [] });
 }));
 
+// Project thumbnail like Superset's: the repo's own favicon/logo when it has one.
+const ICON_CANDIDATES = ['public/favicon.svg', 'public/favicon.png', 'public/icon.png', 'public/logo.png', 'public/favicon.ico', 'app/icon.png', 'app/icon.svg', 'app/favicon.ico', 'src/app/icon.png', 'src/app/favicon.ico', 'static/favicon.png', 'favicon.ico', 'favicon.png', 'icon.png', 'logo.png', 'assets/icon.png'];
+const iconCache = new Map();
+function projectIcon(p) {
+  if (!iconCache.has(p.id)) iconCache.set(p.id, ICON_CANDIDATES.map((c) => path.join(p.path, c)).find((f) => fs.existsSync(f)) || null);
+  return iconCache.get(p.id);
+}
+app.get('/api/projects/:id/icon', (req, res) => {
+  const p = getProject(req.params.id);
+  const icon = p && projectIcon(p);
+  if (!icon) return res.status(404).end();
+  res.set('Cache-Control', 'max-age=3600').sendFile(icon);
+});
+
+app.param('id', (req, res, next, id) => (/^[\w-]+$/.test(id) ? next() : res.status(400).json({ error: 'id invalide' })));
+
 app.get('/api/projects/:id/memory', (req, res) => {
   const f = memoryFile(req.params.id);
   res.json({ path: f, content: fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '' });
@@ -218,6 +250,18 @@ app.get('/api/projects/:id/history', wrap(async (req, res) => {
   const inProject = (cwd) => cwd === p.path || cwd.startsWith(p.path + '/') || wsDirs.has(real(cwd));
   res.json(listSessions().filter((s) => inProject(s.cwd)).map((s) => ({ ...s, imported: known.has(s.sessionId) })));
 }));
+
+// Every Claude Code session on this machine, tagged with the project it belongs to.
+app.get('/api/history', (req, res) => {
+  const projects = db.prepare('SELECT id, path FROM projects').all();
+  const byCwd = new Map(db.prepare('SELECT cwd, project_id FROM workspaces').all().map((r) => [real(r.cwd), r.project_id]));
+  const known = new Set(db.prepare('SELECT session_id FROM workspaces').all().map((r) => r.session_id));
+  res.json(listSessions().map((s) => ({
+    ...s,
+    projectId: byCwd.get(real(s.cwd)) ?? projects.find((p) => s.cwd === p.path || s.cwd.startsWith(p.path + '/'))?.id ?? null,
+    imported: known.has(s.sessionId),
+  })));
+});
 
 // Directories with Claude Code history that aren't projects yet.
 app.get('/api/discover', (req, res) => {
@@ -240,22 +284,34 @@ app.post('/api/pick-folder', (req, res) => {
 });
 
 app.post('/api/workspaces', wrap(async (req, res) => {
-  const p = getProject(req.body.projectId);
-  if (!p) throw new Error('projet introuvable');
-  const name = String(req.body.name || '').trim() || `session ${new Date().toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
+  const p = req.body.projectId ? getProject(req.body.projectId) : null;
+  if (req.body.projectId && !p) throw new Error('projet introuvable');
+  const prompt = req.body.prompt?.trim() || '';
+  // Like Superset: a workspace is named after its task, the main checkout is just "local".
+  const name = String(req.body.name || '').trim() || prompt.replace(/\s+/g, ' ').slice(0, 80) || (req.body.worktree ? 'nouvel espace' : p ? 'local' : 'session');
   const id = uid();
-  let cwd = p.path, branch = null, base = null, isWorktree = 0;
-  if (req.body.worktree) {
+  let cwd = p?.path ?? homedir, branch = null, base = null, isWorktree = 0;
+  if (!p && req.body.cwd) {
+    cwd = String(req.body.cwd).replace(/^~(?=\/|$)/, homedir);
+    if (!fs.existsSync(cwd)) throw new Error('dossier introuvable');
+  }
+  if (req.body.worktree && p) {
     if (!(await git.isRepo(p.path))) throw new Error("le projet n'est pas un repo git");
     base = req.body.baseBranch || (await git.currentBranch(p.path));
     const existing = new Set(await git.branches(p.path));
-    branch = slug(req.body.branch || name);
-    for (let i = 2; existing.has(branch); i++) branch = `${slug(req.body.branch || name)}-${i}`;
+    const wanted = slug(req.body.branch || name.split(' ').slice(0, 6).join(' '));
+    branch = wanted;
+    for (let i = 2; existing.has(branch); i++) branch = `${wanted}-${i}`;
     cwd = path.join(WORKTREES_DIR, slug(p.name), branch);
     await git.addWorktree(p.path, cwd, branch, base);
     isWorktree = 1;
   } else {
-    branch = await git.currentBranch(p.path);
+    branch = await git.currentBranch(cwd);
+  }
+  if (req.body.forkFrom) {
+    const src = getWorkspace(req.body.forkFrom);
+    if (!src?.has_conversation) throw new Error('rien à forker : la session n\'a pas encore de conversation');
+    req.body.resumeSessionId = src.session_id;
   }
   const sessionId = req.body.resumeSessionId || crypto.randomUUID();
   if (req.body.resumeSessionId) {
@@ -264,8 +320,9 @@ app.post('/api/workspaces', wrap(async (req, res) => {
   }
   db.prepare(`INSERT INTO workspaces (id, project_id, name, cwd, branch, base_branch, is_worktree, session_id, has_conversation, initial_prompt, status, status_since, created_at, updated_at)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?)`)
-    .run(id, p.id, name, cwd, branch, base, isWorktree, sessionId, req.body.resumeSessionId ? 1 : 0, req.body.prompt?.trim() || null, now(), now(), now());
+    .run(id, p?.id ?? null, name, cwd, branch, base, isWorktree, sessionId, req.body.resumeSessionId ? 1 : 0, prompt || null, now(), now(), now());
   logEvent(id, 'created', name);
+  if (req.body.forkFrom) forkPending.add(id);
   startAgent(id);
   refreshStats(id);
   res.json(decorate(getWorkspace(id)));
@@ -420,6 +477,7 @@ wss.on('connection', (ws, req) => {
     try { m = JSON.parse(raw); } catch { return; }
     if (m.type === 'input') s.write(m.data);
     else if (m.type === 'resize') s.resize(m.cols, m.rows);
+    else if (m.type === 'kill') { s.kill(); sessions.delete(key); }
     else if (m.type === 'restart') {
       s.clients.delete(ws);
       s.kill();

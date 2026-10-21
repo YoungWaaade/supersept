@@ -22,7 +22,7 @@ db.exec(`
   );
   CREATE TABLE IF NOT EXISTS workspaces (
     id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     cwd TEXT NOT NULL,
     branch TEXT,
@@ -46,6 +46,37 @@ db.exec(`
     at INTEGER NOT NULL
   );
 `);
+// v2: workspaces may live outside any project ("Sessions" section) → project_id becomes nullable.
+const projectCol = db.prepare("SELECT \"notnull\" AS nn FROM pragma_table_info('workspaces') WHERE name = 'project_id'").get();
+if (projectCol?.nn) {
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    PRAGMA legacy_alter_table = ON; -- keep events FK pointing at "workspaces"
+    BEGIN;
+    ALTER TABLE workspaces RENAME TO workspaces_old;
+    CREATE TABLE workspaces (
+      id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      cwd TEXT NOT NULL,
+      branch TEXT,
+      base_branch TEXT,
+      is_worktree INTEGER NOT NULL DEFAULT 0,
+      session_id TEXT NOT NULL,
+      has_conversation INTEGER NOT NULL DEFAULT 0,
+      initial_prompt TEXT,
+      status TEXT NOT NULL DEFAULT 'idle',
+      status_since INTEGER NOT NULL,
+      last_message TEXT,
+      archived INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    INSERT INTO workspaces SELECT * FROM workspaces_old;
+    DROP TABLE workspaces_old;
+    COMMIT;
+  `);
+}
 db.exec('PRAGMA foreign_keys = ON');
 
 export const memoryFile = (projectId) => path.join(MEMORY_DIR, `${projectId}.md`);

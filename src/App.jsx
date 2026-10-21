@@ -4,8 +4,11 @@ import Sidebar from './components/Sidebar.jsx';
 import WorkspaceView from './components/WorkspaceView.jsx';
 import Board from './components/Board.jsx';
 import ProjectView from './components/ProjectView.jsx';
+import { MemoryPage, HistoryPage, SettingsPage } from './components/Pages.jsx';
 import NewWorkspace from './components/NewWorkspace.jsx';
 import AddProject from './components/AddProject.jsx';
+import CommandPalette from './components/CommandPalette.jsx';
+import WorkspaceMenu from './components/WorkspaceMenu.jsx';
 import Empty from './components/Empty.jsx';
 
 function parseHash() {
@@ -15,13 +18,19 @@ function parseHash() {
 
 export default function App() {
   const [data, setData] = useState({ projects: [], workspaces: [] });
+  const [loaded, setLoaded] = useState(false);
+  const [me, setMe] = useState(null);
   const [route, setRoute] = useState(parseHash);
-  const [modal, setModal] = useState(null); // { type: 'new-ws', projectId } | { type: 'add-project' }
+  const [modal, setModal] = useState(null);
+  const [menu, setMenu] = useState(null); // { ws, x, y }
   const [connected, setConnected] = useState(false);
+  const [rightOpen, setRightOpen] = useState(() => localStorage.getItem('rp-open') === '1');
   const routeRef = useRef(route);
   routeRef.current = route;
 
-  const load = useCallback(() => api.get('/api/state').then(setData), []);
+  useEffect(() => localStorage.setItem('rp-open', rightOpen ? '1' : '0'), [rightOpen]);
+  const load = useCallback(() => api.get('/api/state').then((d) => { setData(d); setLoaded(true); }), []);
+  useEffect(() => { api.get('/api/me').then(setMe).catch(() => {}); }, []);
 
   useEffect(() => {
     const onHash = () => setRoute(parseHash());
@@ -58,34 +67,47 @@ export default function App() {
   const attention = data.workspaces.filter((w) => !w.archived && (w.status === 'review' || w.status === 'waiting')).length;
   useEffect(() => { document.title = attention ? `(${attention}) Claude Hub` : 'Claude Hub'; }, [attention]);
 
-  const go = (r) => { location.hash = r.kind === 'board' ? '#/board' : `#/${r.kind}/${r.id}`; };
+  const go = (r) => { location.hash = r.id ? `#/${r.kind}/${r.id}` : `#/${r.kind}`; };
+  const current = route.kind === 'ws' ? data.workspaces.find((w) => w.id === route.id) : null;
+  const contextProject = current?.project_id || (route.kind === 'project' ? route.id : null);
+  const newWorkspace = (projectId) => setModal({ type: 'new-ws', projectId: projectId ?? contextProject ?? data.projects[0]?.id ?? null });
 
   useEffect(() => {
     const onKey = (e) => {
       if (!e.metaKey && !e.ctrlKey) return;
       const active = data.workspaces.filter((w) => !w.archived);
-      if (e.key === 'n' && !e.shiftKey) {
-        e.preventDefault();
-        const cur = active.find((w) => w.id === routeRef.current.id);
-        setModal({ type: 'new-ws', projectId: cur?.project_id || routeRef.current.id || data.projects[0]?.id });
-      } else if (/^[1-9]$/.test(e.key) && e.altKey) {
+      if (e.key === 'n' && !e.shiftKey) { e.preventDefault(); newWorkspace(); }
+      else if (e.key === 'k') { e.preventDefault(); setModal((m) => (m?.type === 'search' ? null : { type: 'search' })); }
+      else if (e.key === ',') { e.preventDefault(); go({ kind: 'settings' }); }
+      else if (/^[1-9]$/.test(e.key) && e.altKey) {
         const w = active[Number(e.key) - 1];
         if (w) { e.preventDefault(); go({ kind: 'ws', id: w.id }); }
       }
     };
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);
-  }, [data]);
+  }, [data, contextProject]);
+
+  const fork = async (ws) => {
+    try {
+      const w = await api.post('/api/workspaces', { projectId: ws.project_id, forkFrom: ws.id, name: `${ws.name} (fork)` });
+      await load();
+      go({ kind: 'ws', id: w.id });
+    } catch (e) { alert(e.message); }
+  };
 
   const projectsById = useMemo(() => Object.fromEntries(data.projects.map((p) => [p.id, p])), [data.projects]);
-  const current = route.kind === 'ws' ? data.workspaces.find((w) => w.id === route.id) : null;
 
   let main;
-  if (!data.projects.length) main = <Empty onAdd={() => setModal({ type: 'add-project' })} />;
-  else if (route.kind === 'ws' && current) main = <WorkspaceView key={current.id} ws={current} project={projectsById[current.project_id]} go={go} />;
-  else if (route.kind === 'project' && projectsById[route.id])
-    main = <ProjectView key={route.id} project={projectsById[route.id]} workspaces={data.workspaces.filter((w) => w.project_id === route.id)} go={go} onNew={() => setModal({ type: 'new-ws', projectId: route.id })} />;
-  else main = <Board data={data} projectsById={projectsById} go={go} />;
+  if (route.kind === 'ws' && current) {
+    main = <WorkspaceView key={current.id} ws={current} project={projectsById[current.project_id]} go={go} onFork={fork} rightOpen={rightOpen} setRightOpen={setRightOpen} />;
+  } else if (route.kind === 'project' && projectsById[route.id]) {
+    main = <ProjectView key={route.id} project={projectsById[route.id]} workspaces={data.workspaces.filter((w) => w.project_id === route.id)} go={go} onNew={() => newWorkspace(route.id)} />;
+  } else if (route.kind === 'memory') main = <MemoryPage projects={data.projects} />;
+  else if (route.kind === 'history') main = <HistoryPage projects={data.projects} go={go} />;
+  else if (route.kind === 'settings') main = <SettingsPage me={me} />;
+  else if (loaded && !data.projects.length && !data.workspaces.length) main = <Empty onAdd={() => setModal({ type: 'add-project' })} onSession={() => setModal({ type: 'new-ws', projectId: null })} />;
+  else main = <Board data={data} projectsById={projectsById} go={go} onContextMenu={(ws, e) => setMenu({ ws, x: e.clientX, y: e.clientY })} />;
 
   return (
     <div className="app">
@@ -93,9 +115,14 @@ export default function App() {
         data={data}
         route={route}
         go={go}
+        me={me}
         connected={connected}
-        onNew={(projectId) => setModal({ type: 'new-ws', projectId })}
+        onNew={newWorkspace}
+        onNewSession={() => setModal({ type: 'new-ws', projectId: null })}
         onAddProject={() => setModal({ type: 'add-project' })}
+        onSearch={() => setModal({ type: 'search' })}
+        onCloseWorkspace={(w) => api.patch(`/api/workspaces/${w.id}`, { archived: true })}
+        onContextMenu={(ws, e) => setMenu({ ws, x: e.clientX, y: e.clientY })}
       />
       <main className="main">{main}</main>
       {modal?.type === 'new-ws' && (
@@ -109,6 +136,8 @@ export default function App() {
       {modal?.type === 'add-project' && (
         <AddProject onClose={() => setModal(null)} onAdded={(p) => { setModal(null); load().then(() => go({ kind: 'project', id: p.id })); }} />
       )}
+      {modal?.type === 'search' && <CommandPalette data={data} projectsById={projectsById} go={go} onClose={() => setModal(null)} onNew={() => newWorkspace()} />}
+      {menu && <WorkspaceMenu {...menu} go={go} onFork={fork} onClose={() => setMenu(null)} />}
     </div>
   );
 }
@@ -118,7 +147,7 @@ function notify(ws, projects, route) {
   if (ws.status !== 'review' && ws.status !== 'waiting') return;
   if (!document.hidden && route.kind === 'ws' && route.id === ws.id) return;
   const project = projects.find((p) => p.id === ws.project_id);
-  const n = new Notification(`${project?.name ?? ''} · ${ws.name}`, {
+  const n = new Notification(`${project ? project.name + ' · ' : ''}${ws.name}`, {
     body: ws.status === 'waiting' ? ws.last_message || STATUS.waiting.label : (ws.last_message || 'Terminé, à revoir').slice(0, 180),
     tag: ws.id,
   });

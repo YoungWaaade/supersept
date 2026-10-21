@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { VscFolderOpened } from 'react-icons/vsc';
+import { HiMiniPlus } from 'react-icons/hi2';
 import { api, ago } from '../api.js';
-import { Modal, Icon } from './ui.jsx';
+import { Modal } from './ui.jsx';
 
 export default function AddProject({ onClose, onAdded }) {
   const [path, setPath] = useState('');
@@ -19,12 +21,12 @@ export default function AddProject({ onClose, onAdded }) {
   };
 
   return (
-    <Modal title="Ajouter un projet" onClose={onClose}>
+    <Modal title="Ouvrir un projet" onClose={onClose}>
       <form className="form" onSubmit={(e) => { e.preventDefault(); add(); }}>
         <label>Dossier
           <div className="input-row">
             <input autoFocus className="mono" placeholder="~/mon-projet" value={path} onChange={(e) => { setPath(e.target.value); setName(e.target.value.replace(/\/$/, '').split('/').pop()); }} />
-            <button type="button" className="ghost" onClick={pick}><Icon name="folder" /> Parcourir</button>
+            <button type="button" className="btn-ghost" onClick={pick}><VscFolderOpened size={14} /> Parcourir</button>
           </div>
         </label>
         <label>Nom
@@ -32,19 +34,19 @@ export default function AddProject({ onClose, onAdded }) {
         </label>
         {error && <div className="error-bar">{error}</div>}
         <div className="form-foot">
-          <button type="button" className="ghost" onClick={onClose}>Annuler</button>
-          <button className="primary" disabled={!path}>Ajouter</button>
+          <button type="button" className="btn-ghost" onClick={onClose}>Annuler</button>
+          <button className="btn-primary" disabled={!path}>Ajouter</button>
         </div>
       </form>
       {found.length > 0 && (
         <div className="discover">
           <div className="discover-title">Dossiers avec un historique Claude Code</div>
           {found.slice(0, 12).map((f) => (
-            <div key={f.path} className="row" onClick={() => add(f.path, f.path.split('/').pop())}>
-              <span className="mono row-title">{f.path.replace(/^\/Users\/[^/]+/, '~')}</span>
-              <span className="dim small">{f.sessions} sessions</span>
-              <span className="time">{ago(f.updatedAt)}</span>
-              <Icon name="plus" />
+            <div key={f.path} className="list-row clickable" onClick={() => add(f.path, f.path.split('/').pop())}>
+              <span className="list-title mono fade-r">{f.path.replace(/^\/Users\/[^/]+/, '~')}</span>
+              <span className="list-meta">{f.sessions} sessions</span>
+              <span className="list-time">{ago(f.updatedAt)}</span>
+              <HiMiniPlus size={14} />
             </div>
           ))}
         </div>

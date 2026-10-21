@@ -28,9 +28,9 @@ export function ago(ts) {
 }
 
 export const STATUS = {
-  working: { label: 'En cours', color: 'var(--blue)' },
-  waiting: { label: 'Attend ton input', color: 'var(--orange)' },
-  review: { label: 'À revoir', color: 'var(--green)' },
-  idle: { label: 'Inactif', color: 'var(--muted)' },
+  working: { label: 'En cours', color: 'var(--amber-500)' },
+  waiting: { label: 'Attend ton input', color: 'var(--yellow-500)' },
+  review: { label: 'À revoir', color: 'var(--green-500)' },
+  idle: { label: 'Inactif', color: 'var(--muted-foreground)' },
   done: { label: 'Terminé', color: 'var(--dim)' },
 };

@@ -1,145 +1,242 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, ago, STATUS } from '../api.js';
-import Terminal, { restartTerminal, disposeTerminals } from './Terminal.jsx';
-import DiffView from './DiffView.jsx';
-import { Icon, StatusDot, Stats } from './ui.jsx';
+import { LuPlus, LuSettings, LuPanelRight, LuPanelRightOpen, LuPanelRightClose, LuZap, LuCopy, LuGitFork, LuSquarePen, LuSquareTerminal, LuX, LuCheck } from 'react-icons/lu';
+import { HiMiniXMark, HiMiniCommandLine } from 'react-icons/hi2';
+import { TbLayoutColumns } from 'react-icons/tb';
+import { api } from '../api.js';
+import Terminal, { restartTerminal, killTerminal, focusTerminal, useTerminalTitle } from './Terminal.jsx';
+import RightPanel from './RightPanel.jsx';
+import { StatusIndicator } from './ui.jsx';
+import claudeLogo from '../assets/claude.svg';
 
-const OPEN_IN = [
-  ['vscode', 'VS Code'],
-  ['cursor', 'Cursor'],
-  ['finder', 'Finder'],
-  ['terminal', 'Terminal'],
-  ['iterm', 'iTerm'],
-];
+const rid = () => Math.random().toString(36).slice(2, 8);
+const DEFAULT_TABS = { tabs: [{ id: 'main', panes: ['agent'], active: 'agent' }], active: 'main' };
 
-export default function WorkspaceView({ ws, project, go }) {
-  const [tab, setTab] = useState('agent');
-  const [shellOpened, setShellOpened] = useState(false);
-  const [menu, setMenu] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [error, setError] = useState(null);
-  const nameRef = useRef(null);
+function useTabs(wsId) {
+  const storageKey = `tabs:${wsId}`;
+  const [state, setState] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(storageKey)) || DEFAULT_TABS; } catch { return DEFAULT_TABS; }
+  });
+  useEffect(() => localStorage.setItem(storageKey, JSON.stringify(state)), [state, storageKey]);
+  return [state, setState];
+}
 
-  useEffect(() => { if (tab === 'shell') setShellOpened(true); }, [tab]);
+export default function WorkspaceView({ ws, project, go, onFork, rightOpen, setRightOpen }) {
+  const [state, setState] = useTabs(ws.id);
+  const [addMenu, setAddMenu] = useState(false);
+  const [toggleHover, setToggleHover] = useState(false);
+  const hasAgentTab = state.tabs.some((t) => t.panes.includes('agent'));
+  const termKey = (pane) => `${ws.id}:${pane === 'agent' ? 'agent' : pane}`;
 
-  const act = async (fn) => {
-    setError(null);
-    try { await fn(); } catch (e) { setError(e.message); }
+  const update = (fn) => setState((s) => fn(structuredClone(s)));
+  const openTab = (pane) => {
+    const id = rid();
+    update((s) => ({ tabs: [...s.tabs, { id, panes: [pane], active: pane }], active: id }));
   };
-  const rename = () => {
-    const name = nameRef.current.value.trim();
-    setEditing(false);
-    if (name && name !== ws.name) act(() => api.patch(`/api/workspaces/${ws.id}`, { name }));
+  const showAgent = () => {
+    const tab = state.tabs.find((t) => t.panes.includes('agent'));
+    if (tab) update((s) => ({ ...s, active: tab.id, tabs: s.tabs.map((t) => (t.id === tab.id ? { ...t, active: 'agent' } : t)) }));
+    else openTab('agent');
+    if (!ws.running) restartTerminal(termKey('agent'));
+    setTimeout(() => focusTerminal(termKey('agent')), 50);
   };
-  const remove = () => act(async () => {
-    const msg = ws.is_worktree
-      ? `Supprimer « ${ws.name} » ?\n\nOK = supprimer aussi le worktree (${ws.cwd}). La branche ${ws.branch} est conservée.`
-      : `Supprimer « ${ws.name} » ? La conversation reste dans l'historique Claude Code.`;
-    if (!confirm(msg)) return;
-    await api.del(`/api/workspaces/${ws.id}${ws.is_worktree ? '?removeWorktree=1' : ''}`);
-    disposeTerminals(ws.id + ':');
-    go({ kind: 'project', id: ws.project_id });
+  const closePane = (tabId, pane) => {
+    // The agent keeps running in the background when its pane is closed, like Superset.
+    if (pane !== 'agent') killTerminal(termKey(pane));
+    update((s) => {
+      const tab = s.tabs.find((t) => t.id === tabId);
+      tab.panes = tab.panes.filter((p) => p !== pane);
+      if (tab.active === pane) tab.active = tab.panes[0];
+      if (!tab.panes.length) {
+        const i = s.tabs.indexOf(tab);
+        s.tabs.splice(i, 1);
+        if (s.active === tabId) s.active = s.tabs[Math.max(0, i - 1)]?.id;
+      }
+      return s;
+    });
+  };
+  const closeTab = (tab) => [...tab.panes].forEach((p) => closePane(tab.id, p));
+  const split = (tabId) => {
+    const pane = `shell-${rid()}`;
+    update((s) => {
+      const tab = s.tabs.find((t) => t.id === tabId);
+      tab.panes.push(pane);
+      tab.active = pane;
+      return s;
+    });
+  };
+  const setActivePane = (tabId, pane) => update((s) => {
+    const tab = s.tabs.find((t) => t.id === tabId);
+    if (tab && tab.active !== pane) tab.active = pane;
+    return s;
   });
 
-  const st = STATUS[ws.status] || STATUS.idle;
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!e.metaKey) return;
+      if (e.key === 't' && !e.shiftKey) { e.preventDefault(); openTab(`shell-${rid()}`); }
+      if (e.key === 'd' && !e.shiftKey && state.active) { e.preventDefault(); split(state.active); }
+    };
+    addEventListener('keydown', onKey);
+    return () => removeEventListener('keydown', onKey);
+  }, [state.active]);
 
   return (
-    <div className="wsview">
-      <header className="wshead">
-        <div className="crumbs">
-          <a onClick={() => go({ kind: 'project', id: project.id })}>
-            <span className="swatch" style={{ background: project.color }} /> {project.name}
-          </a>
-          <span className="sep">/</span>
-          {editing ? (
-            <input ref={nameRef} className="rename" defaultValue={ws.name} autoFocus onBlur={rename} onKeyDown={(e) => e.key === 'Enter' && rename()} />
-          ) : (
-            <h2 onDoubleClick={() => setEditing(true)} title="Double-clic pour renommer">{ws.name}</h2>
-          )}
-          <span className="status-chip" style={{ '--c': st.color }}>
-            <StatusDot status={ws.status} running={ws.running} /> {st.label} · {ago(ws.status_since)}
-          </span>
+    <div className="wsv">
+      <div className="tabbar">
+        <div className="tabbar-scroll">
+          <div className="tabbar-inner">
+            {state.tabs.map((tab) => (
+              <div className="tab-cell" key={tab.id}>
+                <TabItem tab={tab} active={tab.id === state.active} termKey={termKey(tab.active)} onClick={() => update((s) => ({ ...s, active: tab.id }))} onClose={() => closeTab(tab)} />
+              </div>
+            ))}
+            <div className="tab-add-cell">
+              <span className="menu-anchor">
+                <button className="tab-add" title="Nouvel onglet" onClick={() => setAddMenu(!addMenu)}><LuPlus size={14} strokeWidth={2} /></button>
+                {addMenu && (
+                  <Dropdown onClose={() => setAddMenu(false)} className="tab-add-menu">
+                    <button className="popover-item" onClick={() => { setAddMenu(false); showAgent(); }}>
+                      <img src={claudeLogo} alt="" className="preset-icon" /> Claude
+                    </button>
+                    <button className="popover-item" onClick={() => { setAddMenu(false); openTab(`shell-${rid()}`); }}>
+                      <HiMiniCommandLine size={14} /> Terminal <kbd className="popover-kbd">⌘T</kbd>
+                    </button>
+                  </Dropdown>
+                )}
+              </span>
+            </div>
+            <div className="tab-filler" />
+          </div>
         </div>
-        <div className="meta">
-          {ws.branch && (
-            <span className="chip mono"><Icon name="branch" /> {ws.branch}{ws.base_branch && <span className="dim"> ← {ws.base_branch}</span>}</span>
-          )}
-          <span className="chip mono dim" title={ws.cwd}>{ws.cwd.replace(/^\/Users\/[^/]+/, '~')}</span>
+        <div className="tabbar-trailing">
+          <button className="rs-toggle" title={rightOpen ? 'Masquer le panneau' : 'Afficher les changements'}
+            onMouseEnter={() => setToggleHover(true)} onMouseLeave={() => setToggleHover(false)} onClick={() => setRightOpen(!rightOpen)}>
+            {toggleHover ? (rightOpen ? <LuPanelRightClose size={16} strokeWidth={1.5} /> : <LuPanelRightOpen size={16} strokeWidth={1.5} />) : <LuPanelRight size={16} strokeWidth={1.5} />}
+          </button>
         </div>
-        <div className="actions">
-          {ws.status === 'review' && (
-            <button className="ghost" onClick={() => act(() => api.patch(`/api/workspaces/${ws.id}`, { status: 'done' }))}><Icon name="check" /> Terminé</button>
-          )}
-          <div className="menu-wrap">
-            <button className="ghost" onClick={() => setMenu(!menu)}><Icon name="open" /> Ouvrir <Icon name="down" /></button>
-            {menu && (
-              <div className="menu" onMouseLeave={() => setMenu(false)}>
-                {OPEN_IN.map(([k, label]) => (
-                  <button key={k} onClick={() => { setMenu(false); act(() => api.post(`/api/workspaces/${ws.id}/open`, { app: k })); }}>{label}</button>
+      </div>
+
+      <div className="wsv-body">
+        <div className="wsv-main">
+          <div className="presets">
+            <button className="preset-gear" title="Réglages" onClick={() => go({ kind: 'settings' })}><LuSettings size={14} strokeWidth={2} /></button>
+            <button className="preset" title={ws.running ? 'Afficher Claude' : ws.has_conversation ? 'Reprendre la conversation' : 'Lancer Claude'} onClick={showAgent}>
+              <img src={claudeLogo} alt="" className="preset-icon" />
+              <span>Claude</span>
+            </button>
+          </div>
+
+          <div className="tab-panels">
+            {state.tabs.map((tab) => (
+              <div key={tab.id} className="tab-panel" style={{ display: tab.id === state.active ? 'flex' : 'none' }}>
+                {tab.panes.map((pane) => (
+                  <Pane
+                    key={pane}
+                    ws={ws}
+                    pane={pane}
+                    termKey={termKey(pane)}
+                    visible={tab.id === state.active}
+                    split={tab.panes.length > 1}
+                    focused={tab.active === pane}
+                    onFocus={() => setActivePane(tab.id, pane)}
+                    onSplit={() => split(tab.id)}
+                    onClose={() => closePane(tab.id, pane)}
+                    onFork={onFork}
+                  />
                 ))}
+              </div>
+            ))}
+            {!state.tabs.length && (
+              <div className="no-tabs">
+                <p>Aucun onglet ouvert. {ws.running ? 'Claude tourne toujours en arrière-plan.' : ''}</p>
+                <button className="preset" onClick={showAgent}><img src={claudeLogo} alt="" className="preset-icon" /> <span>Ouvrir Claude</span></button>
               </div>
             )}
           </div>
-          {ws.running ? (
-            <button className="ghost" title="Arrêter l'agent" onClick={() => act(() => api.post(`/api/workspaces/${ws.id}/stop`))}><Icon name="stop" /></button>
-          ) : (
-            <button className="ghost" title="Relancer / reprendre la session" onClick={() => { setTab('agent'); restartTerminal(`${ws.id}:agent`); }}><Icon name="play" /></button>
-          )}
-          <button className="ghost" title={ws.archived ? 'Désarchiver' : 'Archiver'} onClick={() => act(() => api.patch(`/api/workspaces/${ws.id}`, { archived: !ws.archived }))}><Icon name="archive" /></button>
-          <button className="ghost danger" title="Supprimer" onClick={remove}><Icon name="trash" /></button>
         </div>
-      </header>
-
-      {error && <div className="error-bar" onClick={() => setError(null)}>{error}</div>}
-
-      {(ws.status === 'review' || ws.status === 'waiting') && ws.last_message && (
-        <div className={`last-msg ${ws.status}`}>
-          <span className="label">{ws.status === 'waiting' ? 'Attend ton input' : 'Dernier message'}</span>
-          <p>{ws.last_message}</p>
-        </div>
-      )}
-
-      <div className="tabs">
-        <button className={tab === 'agent' ? 'on' : ''} onClick={() => setTab('agent')}><Icon name="agent" /> Claude</button>
-        <button className={tab === 'shell' ? 'on' : ''} onClick={() => setTab('shell')}><Icon name="terminal" /> Terminal</button>
-        <button className={tab === 'diff' ? 'on' : ''} onClick={() => setTab('diff')}><Icon name="diff" /> Changements <Stats stats={ws.stats} /></button>
-        <button className={tab === 'activity' ? 'on' : ''} onClick={() => setTab('activity')}><Icon name="history" /> Activité</button>
-        {!ws.running && tab === 'agent' && (
-          <span className="tab-note">
-            Session arrêtée — <a onClick={() => restartTerminal(`${ws.id}:agent`)}>{ws.has_conversation ? 'reprendre la conversation' : 'relancer'}</a>
-          </span>
-        )}
-      </div>
-
-      <div className="panes">
-        <div className="pane" style={{ display: tab === 'agent' ? 'flex' : 'none' }}>
-          <Terminal termKey={`${ws.id}:agent`} active={tab === 'agent'} />
-        </div>
-        {shellOpened && (
-          <div className="pane" style={{ display: tab === 'shell' ? 'flex' : 'none' }}>
-            <Terminal termKey={`${ws.id}:shell`} active={tab === 'shell'} />
-          </div>
-        )}
-        {tab === 'diff' && <div className="pane scroll"><DiffView ws={ws} /></div>}
-        {tab === 'activity' && <div className="pane scroll"><Activity ws={ws} /></div>}
+        {rightOpen && <RightPanel ws={ws} project={project} go={go} />}
       </div>
     </div>
   );
 }
 
-function Activity({ ws }) {
-  const [events, setEvents] = useState([]);
-  useEffect(() => { api.get(`/api/workspaces/${ws.id}/events`).then(setEvents); }, [ws.id, ws.status]);
-  const LABEL = { created: 'Créé', prompt: 'Toi', stop: 'Claude', waiting: 'Attente' };
+function TabItem({ tab, active, termKey, onClick, onClose }) {
+  const osc = useTerminalTitle(termKey);
+  const title = tab.panes.includes('agent') ? 'Claude' : osc.replace(/^[^\w~/]+\s*/, '') || 'Terminal';
   return (
-    <div className="activity">
-      {events.map((e) => (
-        <div key={e.id} className={`event ${e.kind}`}>
-          <div className="event-head"><span>{LABEL[e.kind] || e.kind}</span><time>{new Date(e.at).toLocaleString('fr-FR')}</time></div>
-          {e.text && <p>{e.text}</p>}
-        </div>
-      ))}
-      {!events.length && <p className="dim">Aucune activité pour l'instant.</p>}
+    <div className={`tab ${active ? 'active' : ''}`} onClick={onClick} title={title}>
+      <div className="tab-title"><span className="tab-label fade-r">{title}</span></div>
+      <div className="tab-close-slot">
+        <button className="tab-close" title="Fermer l'onglet" onClick={(e) => { e.stopPropagation(); onClose(); }}><LuX size={14} /></button>
+      </div>
     </div>
   );
+}
+
+function Pane({ ws, pane, termKey, visible, split, focused, onFocus, onSplit, onClose, onFork }) {
+  const isAgent = pane === 'agent';
+  const osc = useTerminalTitle(termKey);
+  const [renaming, setRenaming] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const input = useRef(null);
+  const title = isAgent ? osc || ws.name : osc || 'Terminal';
+
+  const rename = () => {
+    const name = input.current.value.trim();
+    setRenaming(false);
+    if (name && name !== ws.name) api.patch(`/api/workspaces/${ws.id}`, { name });
+  };
+  const copyPath = async () => {
+    await navigator.clipboard.writeText(ws.cwd);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+
+  return (
+    <div className={`pane ${split && focused ? 'focused' : ''} ${focused ? '' : 'inactive'}`} onMouseDown={onFocus}>
+      <div className="pane-header">
+        <div className="pane-header-inner">
+          <div className="pane-title-wrap">
+            {renaming ? (
+              <input ref={input} className="pane-rename" defaultValue={ws.name} autoFocus onBlur={rename}
+                onKeyDown={(e) => { if (e.key === 'Enter') rename(); if (e.key === 'Escape') setRenaming(false); }} />
+            ) : (
+              <button className="pane-title" title={ws.cwd}>
+                {isAgent ? <img src={claudeLogo} alt="" className="preset-icon" /> : <LuSquareTerminal size={14} />}
+                <span className="pane-title-text">{title}</span>
+              </button>
+            )}
+            {isAgent && <StatusIndicator status={ws.status} />}
+          </div>
+          <div className="pane-actions">
+            {isAgent && (
+              <button className="pane-action" title={ws.running ? 'Relancer Claude' : ws.has_conversation ? 'Reprendre la conversation' : 'Lancer Claude'} onClick={() => restartTerminal(termKey)}><LuZap size={14} /></button>
+            )}
+            <button className="pane-action" title={copied ? 'Copié !' : 'Copier le chemin'} onClick={copyPath}>{copied ? <LuCheck size={14} /> : <LuCopy size={14} />}</button>
+            {isAgent && <button className="pane-action" title="Forker la conversation dans un nouvel espace" onClick={() => onFork(ws)}><LuGitFork size={14} /></button>}
+            {isAgent && <button className="pane-action strong" title="Renommer l'espace" onClick={() => setRenaming(true)}><LuSquarePen size={14} /></button>}
+            <button className="pane-action strong" title="Diviser (⌘D)" onClick={onSplit}><TbLayoutColumns size={14} /></button>
+            <button className="pane-action" title={isAgent ? 'Fermer le panneau (Claude continue en arrière-plan)' : 'Fermer le terminal'} onClick={onClose}><HiMiniXMark size={14} /></button>
+          </div>
+        </div>
+      </div>
+      <div className="pane-content">
+        <div className="term-wrap">
+          <Terminal termKey={termKey} active={visible && focused} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function Dropdown({ onClose, children, className = '' }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const close = (e) => !ref.current?.contains(e.target) && onClose();
+    const esc = (e) => e.key === 'Escape' && onClose();
+    setTimeout(() => addEventListener('mousedown', close));
+    addEventListener('keydown', esc);
+    return () => { removeEventListener('mousedown', close); removeEventListener('keydown', esc); };
+  }, [onClose]);
+  return <div ref={ref} className={`popover ${className}`}>{children}</div>;
 }

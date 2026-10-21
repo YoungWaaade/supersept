@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { HiChevronRight } from 'react-icons/hi2';
+import { LuRefreshCw } from 'react-icons/lu';
 import { api } from '../api.js';
-import { Icon } from './ui.jsx';
 
 function parse(patch) {
   const files = [];
@@ -12,7 +13,7 @@ function parse(patch) {
     } else if (!f) continue;
     else if (line.startsWith('new file')) f.isNew = true;
     else if (line.startsWith('deleted file')) f.deleted = true;
-    else if (line.startsWith('Binary') ) f.binary = true;
+    else if (line.startsWith('Binary')) f.binary = true;
     else if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('index ') || line.startsWith('similarity') || line.startsWith('rename')) continue;
     else if (line.startsWith('@@')) {
       const m = /-(\d+)(?:,\d+)? \+(\d+)/.exec(line);
@@ -34,54 +35,46 @@ export default function DiffView({ ws }) {
   useEffect(() => { load(); }, [ws.id, ws.status]);
   const files = useMemo(() => (data ? parse(data.patch) : []), [data]);
 
-  if (error) return <p className="dim pad">{error}</p>;
-  if (!data) return <p className="dim pad">Chargement…</p>;
-  if (!files.length) return <p className="dim pad">Aucun changement {data.base ? `par rapport à ${data.base}` : '(pas un repo git)'}.</p>;
+  if (error) return <p className="empty-note">{error}</p>;
+  if (!data) return <p className="empty-note">Chargement…</p>;
 
   return (
     <div className="diff">
       <div className="diff-bar">
-        <span>{files.length} fichier{files.length > 1 ? 's' : ''} · comparé à <b className="mono">{data.base}</b></span>
-        <button className="ghost" onClick={load}><Icon name="restart" /> Rafraîchir</button>
+        <span>{files.length ? `${files.length} fichier${files.length > 1 ? 's' : ''}` : 'Aucun changement'}{data.base && <> · <span className="mono">{data.base}</span></>}</span>
+        <button className="iconbtn size-6" title="Rafraîchir" onClick={load}><LuRefreshCw size={12} /></button>
       </div>
-      <div className="diff-layout">
-        <ul className="diff-files">
-          {files.map((f) => (
-            <li key={f.path}><a href={`#diff-${f.path}`} onClick={(e) => { e.preventDefault(); document.getElementById(`diff-${f.path}`)?.scrollIntoView({ behavior: 'smooth' }); }}>
-              <span className="mono fname">{f.path}</span>
-              <span className="stats mono"><span className="add">+{f.add}</span> <span className="del">−{f.del}</span></span>
-            </a></li>
+      {!files.length && !data.base && <p className="empty-note">Pas un repo git.</p>}
+      {files.map((f) => (
+        <section className="diff-file" key={f.path}>
+          <header onClick={() => setClosed({ ...closed, [f.path]: !closed[f.path] })}>
+            <HiChevronRight size={12} className={`chev ${closed[f.path] ? '' : 'open'}`} />
+            <span className="diff-path fade-r" title={f.path}>
+              <span className="muted">{f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/') + 1) : ''}</span>{f.path.split('/').pop()}
+            </span>
+            {f.isNew && <span className="tag green">A</span>}
+            {f.deleted && <span className="tag red">D</span>}
+            <span className="diffstats active"><span className="add">+{f.add}</span><span className="del">−{f.del}</span></span>
+          </header>
+          {!closed[f.path] && (f.binary ? <p className="empty-note">Fichier binaire ou trop gros</p> : (
+            <div className="code-scroll">
+              <table className="code">
+                <tbody>
+                  {f.lines.map((l, i) => l.t === 'hunk' ? (
+                    <tr key={i} className="hunk"><td colSpan={3}>{l.text}</td></tr>
+                  ) : (
+                    <tr key={i} className={l.t}>
+                      <td className="ln">{l.o ?? ''}</td>
+                      <td className="ln">{l.n ?? ''}</td>
+                      <td className="src">{l.text || ' '}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ))}
-        </ul>
-        <div className="diff-body">
-          {files.map((f) => (
-            <section className="file" key={f.path} id={`diff-${f.path}`}>
-              <header onClick={() => setClosed({ ...closed, [f.path]: !closed[f.path] })}>
-                <Icon name={closed[f.path] ? 'right' : 'down'} />
-                <span className="mono">{f.path}</span>
-                {f.isNew && <span className="tag green">nouveau</span>}
-                {f.deleted && <span className="tag red">supprimé</span>}
-                <span className="stats mono"><span className="add">+{f.add}</span> <span className="del">−{f.del}</span></span>
-              </header>
-              {!closed[f.path] && (f.binary ? <p className="dim pad">Fichier binaire ou trop gros</p> : (
-                <table className="code mono">
-                  <tbody>
-                    {f.lines.map((l, i) => l.t === 'hunk' ? (
-                      <tr key={i} className="hunk"><td colSpan={3}>{l.text}</td></tr>
-                    ) : (
-                      <tr key={i} className={l.t}>
-                        <td className="ln">{l.o ?? ''}</td>
-                        <td className="ln">{l.n ?? ''}</td>
-                        <td className="src"><span className="sign">{l.t === 'add' ? '+' : l.t === 'del' ? '−' : ' '}</span>{l.text}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ))}
-            </section>
-          ))}
-        </div>
-      </div>
+        </section>
+      ))}
     </div>
   );
 }
