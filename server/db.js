@@ -79,4 +79,13 @@ if (projectCol?.nn) {
 }
 db.exec('PRAGMA foreign_keys = ON');
 
+// Additive migrations.
+const addColumn = (table, col, type) => {
+  if (!db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?`).get(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+};
+addColumn('workspaces', 'model', 'TEXT');
+addColumn('workspaces', 'effort', 'TEXT');
+addColumn('workspaces', 'permission_mode', 'TEXT');
+addColumn('projects', 'run_command', 'TEXT');
+
 export const memoryFile = (projectId) => path.join(MEMORY_DIR, `${projectId}.md`);

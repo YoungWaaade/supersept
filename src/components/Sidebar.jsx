@@ -26,7 +26,7 @@ const persisted = (key, init) => {
   try { return JSON.parse(localStorage.getItem(key)) ?? init; } catch { return init; }
 };
 
-export default function Sidebar({ data, route, go, connected, me, onNew, onNewSession, onAddProject, onSearch, onCloseWorkspace, onContextMenu }) {
+export default function Sidebar({ data, route, go, connected, me, onNew, onNewSession, onAddProject, onSearch, onCloseWorkspace, onContextMenu, onProjectMenu }) {
   const [width, setWidth] = useState(() => persisted('sb-width', DEFAULT_WIDTH));
   const [collapsed, setCollapsed] = useState(() => persisted('sb-collapsed', false));
   const [closedProjects, setClosedProjects] = useState(() => persisted('sb-closed-projects', {}));
@@ -139,14 +139,15 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
             const open = !closedProjects[p.id] || !!q;
             return (
               <div className="sb-project" key={p.id}>
-                <div className={`sb-project-row ${route.kind === 'project' && route.id === p.id ? 'active' : ''}`} role="button"
-                  onClick={() => setClosedProjects({ ...closedProjects, [p.id]: !closedProjects[p.id] })}>
+                <div className="sb-project-row" role="button"
+                  onClick={() => setClosedProjects({ ...closedProjects, [p.id]: !closedProjects[p.id] })}
+                  onContextMenu={(e) => { e.preventDefault(); onProjectMenu(p, e); }}>
                   <div className="sb-project-main">
                     <span className="sb-thumb-slot">
                       <ProjectThumbnail project={p} />
                       <HiChevronRight className={`sb-thumb-chevron ${open ? 'open' : ''}`} size={16} />
                     </span>
-                    <a className="sb-project-name" onClick={(e) => { e.stopPropagation(); go({ kind: 'project', id: p.id }); }}>{p.name}</a>
+                    <span className="sb-project-name">{p.name}</span>
                   </div>
                   <span className="sb-project-add">
                     <button title="Nouvel espace de travail" onClick={(e) => { e.stopPropagation(); onNew(p.id); }}><HiMiniPlus size={16} /></button>

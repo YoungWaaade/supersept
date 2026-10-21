@@ -3,9 +3,9 @@ import { api, wsUrl, STATUS } from './api.js';
 import Sidebar from './components/Sidebar.jsx';
 import WorkspaceView from './components/WorkspaceView.jsx';
 import Board from './components/Board.jsx';
-import ProjectView from './components/ProjectView.jsx';
+import ProjectMenu from './components/ProjectMenu.jsx';
 import { MemoryPage, HistoryPage, SettingsPage } from './components/Pages.jsx';
-import NewWorkspace from './components/NewWorkspace.jsx';
+import NewWorkspacePage from './components/NewWorkspacePage.jsx';
 import AddProject from './components/AddProject.jsx';
 import CommandPalette from './components/CommandPalette.jsx';
 import WorkspaceMenu from './components/WorkspaceMenu.jsx';
@@ -23,6 +23,7 @@ export default function App() {
   const [route, setRoute] = useState(parseHash);
   const [modal, setModal] = useState(null);
   const [menu, setMenu] = useState(null); // { ws, x, y }
+  const [projectMenu, setProjectMenu] = useState(null); // { project, x, y }
   const [connected, setConnected] = useState(false);
   const [rightOpen, setRightOpen] = useState(() => localStorage.getItem('rp-open') === '1');
   const routeRef = useRef(route);
@@ -69,8 +70,8 @@ export default function App() {
 
   const go = (r) => { location.hash = r.id ? `#/${r.kind}/${r.id}` : `#/${r.kind}`; };
   const current = route.kind === 'ws' ? data.workspaces.find((w) => w.id === route.id) : null;
-  const contextProject = current?.project_id || (route.kind === 'project' ? route.id : null);
-  const newWorkspace = (projectId) => setModal({ type: 'new-ws', projectId: projectId ?? contextProject ?? data.projects[0]?.id ?? null });
+  const contextProject = current?.project_id || null;
+  const newWorkspace = (projectId) => go({ kind: 'new', id: projectId === null ? 'none' : projectId ?? contextProject ?? undefined });
 
   useEffect(() => {
     const onKey = (e) => {
@@ -101,12 +102,13 @@ export default function App() {
   let main;
   if (route.kind === 'ws' && current) {
     main = <WorkspaceView key={current.id} ws={current} project={projectsById[current.project_id]} go={go} onFork={fork} rightOpen={rightOpen} setRightOpen={setRightOpen} />;
-  } else if (route.kind === 'project' && projectsById[route.id]) {
-    main = <ProjectView key={route.id} project={projectsById[route.id]} workspaces={data.workspaces.filter((w) => w.project_id === route.id)} go={go} onNew={() => newWorkspace(route.id)} />;
-  } else if (route.kind === 'memory') main = <MemoryPage projects={data.projects} />;
-  else if (route.kind === 'history') main = <HistoryPage projects={data.projects} go={go} />;
+  } else if (route.kind === 'new') {
+    main = <NewWorkspacePage key={route.id || 'new'} projects={data.projects} initialProjectId={route.id} go={go}
+      onAddProject={() => setModal({ type: 'add-project' })} onCreated={(w) => load().then(() => go({ kind: 'ws', id: w.id }))} />;
+  } else if (route.kind === 'memory') main = <MemoryPage key={route.id || 'memory'} projects={data.projects} initial={route.id} />;
+  else if (route.kind === 'history') main = <HistoryPage key={route.id || 'history'} projects={data.projects} go={go} routeId={route.id} />;
   else if (route.kind === 'settings') main = <SettingsPage me={me} />;
-  else if (loaded && !data.projects.length && !data.workspaces.length) main = <Empty onAdd={() => setModal({ type: 'add-project' })} onSession={() => setModal({ type: 'new-ws', projectId: null })} />;
+  else if (loaded && !data.projects.length && !data.workspaces.length) main = <Empty onAdd={() => setModal({ type: 'add-project' })} onSession={() => newWorkspace(null)} />;
   else main = <Board data={data} projectsById={projectsById} go={go} onContextMenu={(ws, e) => setMenu({ ws, x: e.clientX, y: e.clientY })} />;
 
   return (
@@ -118,25 +120,19 @@ export default function App() {
         me={me}
         connected={connected}
         onNew={newWorkspace}
-        onNewSession={() => setModal({ type: 'new-ws', projectId: null })}
+        onNewSession={() => newWorkspace(null)}
         onAddProject={() => setModal({ type: 'add-project' })}
         onSearch={() => setModal({ type: 'search' })}
         onCloseWorkspace={(w) => api.patch(`/api/workspaces/${w.id}`, { archived: true })}
         onContextMenu={(ws, e) => setMenu({ ws, x: e.clientX, y: e.clientY })}
+        onProjectMenu={(project, e) => setProjectMenu({ project, x: e.clientX, y: e.clientY })}
       />
       <main className="main">{main}</main>
-      {modal?.type === 'new-ws' && (
-        <NewWorkspace
-          projects={data.projects}
-          projectId={modal.projectId}
-          onClose={() => setModal(null)}
-          onCreated={(w) => { setModal(null); load().then(() => go({ kind: 'ws', id: w.id })); }}
-        />
-      )}
       {modal?.type === 'add-project' && (
-        <AddProject onClose={() => setModal(null)} onAdded={(p) => { setModal(null); load().then(() => go({ kind: 'project', id: p.id })); }} />
+        <AddProject onClose={() => setModal(null)} onAdded={(p) => { setModal(null); load(); }} />
       )}
       {modal?.type === 'search' && <CommandPalette data={data} projectsById={projectsById} go={go} onClose={() => setModal(null)} onNew={() => newWorkspace()} />}
+      {projectMenu && <ProjectMenu {...projectMenu} go={go} onNew={newWorkspace} onClose={() => setProjectMenu(null)} />}
       {menu && <WorkspaceMenu {...menu} go={go} onFork={fork} onClose={() => setMenu(null)} />}
     </div>
   );

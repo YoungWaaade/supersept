@@ -56,7 +56,7 @@ export async function removeWorktree(repo, dest) {
 }
 
 async function diffBase(ws) {
-  if (ws.is_worktree && ws.base_branch) {
+  if (ws.base_branch) {
     try {
       return (await git(ws.cwd, 'merge-base', 'HEAD', ws.base_branch)).trim();
     } catch {}
@@ -106,4 +106,80 @@ export async function diff(ws) {
     } catch {}
   }
   return { patch, base: base === 'HEAD' ? 'HEAD' : ws.base_branch };
+}
+
+export async function commits(ws) {
+  if (!(await isRepo(ws.cwd)) || !ws.base_branch) return [];
+  try {
+    const out = await git(ws.cwd, 'log', '--format=%H%x1f%h%x1f%s%x1f%an%x1f%at', `${ws.base_branch}..HEAD`);
+    return out.split('\n').filter(Boolean).map((l) => {
+      const [sha, short, subject, author, at] = l.split('\x1f');
+      return { sha, short, subject, author, at: Number(at) * 1000 };
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function showCommit(ws, sha) {
+  if (!/^[0-9a-f]{7,40}$/.test(sha)) throw new Error('commit invalide');
+  return git(ws.cwd, 'show', '--no-color', '--format=', sha);
+}
+
+// Changed paths with their status letter (M/A/D/R/?) relative to the diff base.
+export async function changedFiles(ws) {
+  if (!(await isRepo(ws.cwd))) return [];
+  const base = await diffBase(ws);
+  const files = new Map();
+  for (const line of (await git(ws.cwd, 'diff', '--name-status', base)).split('\n').filter(Boolean)) {
+    const [st, ...paths] = line.split('\t');
+    files.set(paths[paths.length - 1], st[0]);
+  }
+  for (const f of await untracked(ws.cwd)) files.set(f, '?');
+  return [...files].map(([path, status]) => ({ path, status }));
+}
+
+const SKIP = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.turbo', '.cache', '.venv', '__pycache__']);
+export async function listFiles(dir) {
+  if (await isRepo(dir)) {
+    const out = await git(dir, 'ls-files', '-co', '--exclude-standard');
+    return out.split('\n').filter(Boolean).slice(0, 20000);
+  }
+  const out = [];
+  const walk = (rel) => {
+    if (out.length >= 5000) return;
+    for (const e of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+      if (SKIP.has(e.name) || e.name.startsWith('.DS_Store')) continue;
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(r);
+      else out.push(r);
+    }
+  };
+  try { walk(''); } catch {}
+  return out;
+}
+
+// Local + origin branches, most recent first, for the branch picker.
+export async function branchList(dir) {
+  if (!(await isRepo(dir))) return [];
+  const fmt = '%(refname)%1f%(refname:short)%1f%(committerdate:unix)';
+  const out = await git(dir, 'for-each-ref', `--format=${fmt}`, 'refs/heads', 'refs/remotes/origin');
+  let def = null;
+  try { def = (await git(dir, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD')).trim().replace(/^origin\//, ''); } catch {}
+  const worktrees = new Set();
+  try {
+    for (const l of (await git(dir, 'worktree', 'list', '--porcelain')).split('\n')) if (l.startsWith('branch refs/heads/')) worktrees.add(l.slice(18));
+  } catch {}
+  const local = new Map(), remote = new Map();
+  for (const line of out.split('\n').filter(Boolean)) {
+    const [ref, short, at] = line.split('\x1f');
+    if (ref.startsWith('refs/heads/')) local.set(short, Number(at) * 1000);
+    else if (!short.endsWith('/HEAD') && short !== 'origin') remote.set(short.replace(/^origin\//, ''), Number(at) * 1000);
+  }
+  def ??= local.has('main') ? 'main' : local.has('master') ? 'master' : null;
+  const all = [...local].map(([name, at]) => ({ name, at, remote: false }));
+  for (const [name, at] of remote) if (!local.has(name)) all.push({ name: `origin/${name}`, at, remote: true });
+  return all
+    .map((b) => ({ ...b, isDefault: b.name === def, worktree: worktrees.has(b.name) }))
+    .sort((a, b) => (b.isDefault - a.isDefault) || b.at - a.at);
 }

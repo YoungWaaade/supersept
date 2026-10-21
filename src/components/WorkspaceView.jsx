@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { LuPlus, LuSettings, LuPanelRight, LuPanelRightOpen, LuPanelRightClose, LuZap, LuCopy, LuGitFork, LuSquarePen, LuSquareTerminal, LuX, LuCheck } from 'react-icons/lu';
+import { LuPlus, LuSettings, LuPanelRight, LuPanelRightOpen, LuPanelRightClose, LuZap, LuCopy, LuGitFork, LuSquarePen, LuSquareTerminal, LuX, LuCheck, LuGitCompareArrows, LuFile, LuPlay } from 'react-icons/lu';
 import { HiMiniXMark, HiMiniCommandLine } from 'react-icons/hi2';
 import { TbLayoutColumns } from 'react-icons/tb';
 import { api } from '../api.js';
-import Terminal, { restartTerminal, killTerminal, focusTerminal, useTerminalTitle } from './Terminal.jsx';
+import Terminal, { restartTerminal, killTerminal, focusTerminal, useTerminalTitle, sendInput } from './Terminal.jsx';
+import DiffView, { FileViewer } from './DiffView.jsx';
 import RightPanel from './RightPanel.jsx';
 import { StatusIndicator } from './ui.jsx';
 import claudeLogo from '../assets/claude.svg';
@@ -24,8 +25,8 @@ export default function WorkspaceView({ ws, project, go, onFork, rightOpen, setR
   const [state, setState] = useTabs(ws.id);
   const [addMenu, setAddMenu] = useState(false);
   const [toggleHover, setToggleHover] = useState(false);
-  const hasAgentTab = state.tabs.some((t) => t.panes.includes('agent'));
-  const termKey = (pane) => `${ws.id}:${pane === 'agent' ? 'agent' : pane}`;
+  const termKey = (pane) => `${ws.id}:${pane}`;
+  const isTerminal = (pane) => pane === 'agent' || pane === 'run' || pane.startsWith('shell-');
 
   const update = (fn) => setState((s) => fn(structuredClone(s)));
   const openTab = (pane) => {
@@ -39,9 +40,27 @@ export default function WorkspaceView({ ws, project, go, onFork, rightOpen, setR
     if (!ws.running) restartTerminal(termKey('agent'));
     setTimeout(() => focusTerminal(termKey('agent')), 50);
   };
+  // Open (or focus) a single-pane tab: diff viewer, file viewer, run output.
+  const focusOrOpen = (pane, extra = {}) => update((s) => {
+    const tab = s.tabs.find((t) => t.panes.includes(pane));
+    if (tab) { Object.assign(tab, extra); tab.active = pane; return { ...s, active: tab.id }; }
+    const id = rid();
+    return { tabs: [...s.tabs, { id, panes: [pane], active: pane, ...extra }], active: id };
+  });
+  const openDiff = (path, sha) => focusOrOpen('diff', { focus: path, sha: sha || null, nonce: Date.now() });
+  const openFile = (path) => focusOrOpen(`file:${path}`);
+  const openRun = async () => {
+    try { await api.post(`/api/workspaces/${ws.id}/run`); } catch (e) { return alert(e.message); }
+    focusOrOpen('run');
+  };
+  const sendToAgent = (text) => {
+    showAgent();
+    setTimeout(() => sendInput(termKey('agent'), text + '\r'), ws.running ? 80 : 2500);
+  };
+
   const closePane = (tabId, pane) => {
     // The agent keeps running in the background when its pane is closed, like Superset.
-    if (pane !== 'agent') killTerminal(termKey(pane));
+    if (pane !== 'agent' && pane !== 'run' && isTerminal(pane)) killTerminal(termKey(pane));
     update((s) => {
       const tab = s.tabs.find((t) => t.id === tabId);
       tab.panes = tab.panes.filter((p) => p !== pane);
@@ -82,6 +101,7 @@ export default function WorkspaceView({ ws, project, go, onFork, rightOpen, setR
 
   return (
     <div className="wsv">
+     <div className="wsv-col">
       <div className="tabbar">
         <div className="tabbar-scroll">
           <div className="tabbar-inner">
@@ -129,7 +149,9 @@ export default function WorkspaceView({ ws, project, go, onFork, rightOpen, setR
           <div className="tab-panels">
             {state.tabs.map((tab) => (
               <div key={tab.id} className="tab-panel" style={{ display: tab.id === state.active ? 'flex' : 'none' }}>
-                {tab.panes.map((pane) => (
+                {tab.panes.map((pane) => !isTerminal(pane) ? (
+                  <ViewerPane key={pane} ws={ws} pane={pane} tab={tab} onClose={() => closePane(tab.id, pane)} />
+                ) : (
                   <Pane
                     key={pane}
                     ws={ws}
@@ -154,7 +176,41 @@ export default function WorkspaceView({ ws, project, go, onFork, rightOpen, setR
             )}
           </div>
         </div>
-        {rightOpen && <RightPanel ws={ws} project={project} go={go} />}
+      </div>
+     </div>
+      {rightOpen && <RightPanel ws={ws} project={project} go={go} onOpenDiff={openDiff} onOpenFile={openFile} onRun={openRun} sendToAgent={sendToAgent} />}
+    </div>
+  );
+}
+
+function paneTitle(pane, osc) {
+  if (pane === 'agent') return 'Claude';
+  if (pane === 'run') return 'Run';
+  if (pane === 'diff') return 'Modifications';
+  if (pane.startsWith('file:')) return pane.slice(5).split('/').pop();
+  return osc.replace(/^[^\w~/]+\s*/, '') || 'Terminal';
+}
+
+function ViewerPane({ ws, pane, tab, onClose }) {
+  const isDiff = pane === 'diff';
+  const path = pane.slice(5);
+  return (
+    <div className="pane">
+      <div className="pane-header">
+        <div className="pane-header-inner">
+          <div className="pane-title-wrap">
+            <button className="pane-title" title={isDiff ? 'Modifications' : path}>
+              {isDiff ? <LuGitCompareArrows size={14} /> : <LuFile size={14} />}
+              <span className="pane-title-text">{isDiff ? (tab.sha ? `Commit ${tab.sha.slice(0, 7)}` : 'Modifications') : path}</span>
+            </button>
+          </div>
+          <div className="pane-actions">
+            <button className="pane-action" title="Fermer" onClick={onClose}><HiMiniXMark size={14} /></button>
+          </div>
+        </div>
+      </div>
+      <div className="pane-content viewer">
+        {isDiff ? <DiffView ws={ws} focus={tab.focus} sha={tab.sha} nonce={tab.nonce} /> : <FileViewer ws={ws} path={path} />}
       </div>
     </div>
   );
@@ -162,10 +218,11 @@ export default function WorkspaceView({ ws, project, go, onFork, rightOpen, setR
 
 function TabItem({ tab, active, termKey, onClick, onClose }) {
   const osc = useTerminalTitle(termKey);
-  const title = tab.panes.includes('agent') ? 'Claude' : osc.replace(/^[^\w~/]+\s*/, '') || 'Terminal';
+  const title = paneTitle(tab.panes.includes('agent') ? 'agent' : tab.active || tab.panes[0], osc);
+  const icon = tab.active === 'diff' ? <LuGitCompareArrows size={14} /> : tab.active?.startsWith('file:') ? <LuFile size={14} /> : tab.active === 'run' ? <LuPlay size={14} /> : null;
   return (
     <div className={`tab ${active ? 'active' : ''}`} onClick={onClick} title={title}>
-      <div className="tab-title"><span className="tab-label fade-r">{title}</span></div>
+      <div className="tab-title">{icon}<span className="tab-label fade-r">{title}</span></div>
       <div className="tab-close-slot">
         <button className="tab-close" title="Fermer l'onglet" onClick={(e) => { e.stopPropagation(); onClose(); }}><LuX size={14} /></button>
       </div>
@@ -179,7 +236,7 @@ function Pane({ ws, pane, termKey, visible, split, focused, onFocus, onSplit, on
   const [renaming, setRenaming] = useState(false);
   const [copied, setCopied] = useState(false);
   const input = useRef(null);
-  const title = isAgent ? osc || ws.name : osc || 'Terminal';
+  const title = isAgent ? osc || ws.name : pane === 'run' ? `Run · ${osc || 'commande du projet'}` : osc || 'Terminal';
 
   const rename = () => {
     const name = input.current.value.trim();

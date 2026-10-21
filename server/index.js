@@ -16,6 +16,7 @@ const PORT = Number(process.env.PORT || 4317);
 const HOST = '127.0.0.1';
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CLAUDE = which('claude') || 'claude';
+const GH = which('gh');
 const COLORS = ['#7c8cff', '#4fd1a5', '#f6a04d', '#f06292', '#5ec8f2', '#c792ea', '#e6c84f', '#ff7a6b'];
 const now = () => Date.now();
 const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
@@ -41,6 +42,7 @@ function decorate(ws) {
     has_conversation: !!ws.has_conversation,
     archived: !!ws.archived,
     running: !!sessions.get(`${ws.id}:agent`)?.alive,
+    run_running: !!sessions.get(`${ws.id}:run`)?.alive,
     stats: statsCache.get(ws.id) || null,
   };
 }
@@ -129,6 +131,9 @@ function startAgent(wsId) {
   const project = ws.project_id ? getProject(ws.project_id) : null;
   if (!fs.existsSync(ws.cwd)) throw new Error(`dossier introuvable : ${ws.cwd}`);
   const args = ['--settings', hookSettings(ws.id), '--add-dir', MEMORY_DIR, '--append-system-prompt', systemPrompt(ws, project), '-n', ws.name];
+  if (ws.model) args.push('--model', ws.model);
+  if (ws.effort) args.push('--effort', ws.effort);
+  if (ws.permission_mode) args.push('--permission-mode', ws.permission_mode);
   if (ws.has_conversation) {
     args.push('--resume', ws.session_id);
     if (ws.fork_pending) args.push('--fork-session');
@@ -148,6 +153,16 @@ function startAgent(wsId) {
   return s;
 }
 
+// Project "run" command (dev server, etc.) in its own PTY, like Superset's Run button.
+function startRun(wsId) {
+  const ws = getWorkspace(wsId);
+  const project = ws?.project_id && getProject(ws.project_id);
+  if (!project?.run_command) throw new Error("aucune commande d'exécution définie pour ce projet");
+  const s = spawn(`${wsId}:run`, process.env.SHELL || '/bin/zsh', ['-lc', project.run_command], ws.cwd, { onExit: () => pushWorkspace(wsId) });
+  pushWorkspace(wsId);
+  return s;
+}
+
 function ensureSession(key) {
   const existing = sessions.get(key);
   if (existing) return existing;
@@ -156,6 +171,7 @@ function ensureSession(key) {
   if (!ws) return null;
   if (kind === 'agent') return startAgent(wsId);
   if (/^shell(-[\w]+)?$/.test(kind)) return spawnShell(key, ws.cwd);
+  if (kind === 'run') return startRun(wsId);
   return null;
 }
 
@@ -197,7 +213,8 @@ app.post('/api/projects', wrap(async (req, res) => {
 app.patch('/api/projects/:id', wrap(async (req, res) => {
   const p = getProject(req.params.id);
   if (!p) throw new Error('projet introuvable');
-  db.prepare('UPDATE projects SET name = ?, color = ? WHERE id = ?').run(req.body.name ?? p.name, req.body.color ?? p.color, p.id);
+  const run = req.body.run_command === undefined ? p.run_command : String(req.body.run_command).trim() || null;
+  db.prepare('UPDATE projects SET name = ?, color = ?, run_command = ? WHERE id = ?').run(req.body.name ?? p.name, req.body.color ?? p.color, run, p.id);
   broadcast({ type: 'reload' });
   res.json(getProject(p.id));
 }));
@@ -231,6 +248,25 @@ app.get('/api/projects/:id/icon', (req, res) => {
 });
 
 app.param('id', (req, res, next, id) => (/^[\w-]+$/.test(id) ? next() : res.status(400).json({ error: 'id invalide' })));
+
+app.get('/api/projects/:id/branches', wrap(async (req, res) => {
+  const p = getProject(req.params.id);
+  if (!p) throw new Error('projet introuvable');
+  res.json(await git.branchList(p.path));
+}));
+
+// GitHub issues / PRs through the user's own `gh` login.
+app.get('/api/projects/:id/github/:kind', wrap(async (req, res) => {
+  const p = getProject(req.params.id);
+  if (!p) throw new Error('projet introuvable');
+  const kind = req.params.kind === 'prs' ? 'pr' : 'issue';
+  const fields = kind === 'pr' ? 'number,title,url,headRefName,author,updatedAt' : 'number,title,url,body,author,updatedAt';
+  const args = [kind, 'list', '--limit', '50', '--json', fields];
+  if (req.query.q) args.push('--search', String(req.query.q));
+  const out = await new Promise((ok, ko) => execFile(GH || 'gh', args, { cwd: p.path, env: { ...process.env, PATH: process.env.PATH + ':/opt/homebrew/bin' }, maxBuffer: 10 * 1024 * 1024 },
+    (e, stdout, stderr) => (e ? ko(new Error(stderr.trim().split('\n')[0] || 'gh a échoué')) : ok(stdout))));
+  res.json(JSON.parse(out || '[]'));
+}));
 
 app.get('/api/projects/:id/memory', (req, res) => {
   const f = memoryFile(req.params.id);
@@ -298,6 +334,11 @@ app.post('/api/workspaces', wrap(async (req, res) => {
   if (req.body.worktree && p) {
     if (!(await git.isRepo(p.path))) throw new Error("le projet n'est pas un repo git");
     base = req.body.baseBranch || (await git.currentBranch(p.path));
+    if (req.body.prBranch) {
+      const head = String(req.body.prBranch).replace(/[^\w./-]/g, '');
+      await git.git(p.path, 'fetch', 'origin', head);
+      base = `origin/${head}`;
+    }
     const existing = new Set(await git.branches(p.path));
     const wanted = slug(req.body.branch || name.split(' ').slice(0, 6).join(' '));
     branch = wanted;
@@ -321,6 +362,15 @@ app.post('/api/workspaces', wrap(async (req, res) => {
   db.prepare(`INSERT INTO workspaces (id, project_id, name, cwd, branch, base_branch, is_worktree, session_id, has_conversation, initial_prompt, status, status_since, created_at, updated_at)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?)`)
     .run(id, p?.id ?? null, name, cwd, branch, base, isWorktree, sessionId, req.body.resumeSessionId ? 1 : 0, prompt || null, now(), now(), now());
+  const MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
+  const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+  const MODES = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'plan'];
+  db.prepare('UPDATE workspaces SET model = ?, effort = ?, permission_mode = ? WHERE id = ?').run(
+    MODELS.includes(req.body.model) ? req.body.model : null,
+    EFFORTS.includes(req.body.effort) ? req.body.effort : null,
+    MODES.includes(req.body.permissionMode) ? req.body.permissionMode : null,
+    id,
+  );
   logEvent(id, 'created', name);
   if (req.body.forkFrom) forkPending.add(id);
   startAgent(id);
@@ -332,8 +382,10 @@ app.patch('/api/workspaces/:id', wrap(async (req, res) => {
   const ws = getWorkspace(req.params.id);
   if (!ws) throw new Error('workspace introuvable');
   const status = req.body.status && ['idle', 'review', 'done'].includes(req.body.status) ? req.body.status : null;
-  db.prepare('UPDATE workspaces SET name = ?, archived = ?, updated_at = ? WHERE id = ?')
-    .run(req.body.name ?? ws.name, req.body.archived === undefined ? ws.archived : req.body.archived ? 1 : 0, now(), ws.id);
+  const base = typeof req.body.base_branch === 'string' && /^[\w./-]+$/.test(req.body.base_branch) ? req.body.base_branch : ws.base_branch;
+  db.prepare('UPDATE workspaces SET name = ?, archived = ?, base_branch = ?, updated_at = ? WHERE id = ?')
+    .run(req.body.name ?? ws.name, req.body.archived === undefined ? ws.archived : req.body.archived ? 1 : 0, base, now(), ws.id);
+  if (base !== ws.base_branch) refreshStats(ws.id);
   if (req.body.archived) killWorkspace(ws.id);
   if (status) setStatus(ws.id, status);
   else pushWorkspace(ws.id);
@@ -360,6 +412,29 @@ app.post('/api/workspaces/:id/restart', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+app.post('/api/workspaces/:id/run', wrap(async (req, res) => {
+  startRun(req.params.id);
+  res.json({ ok: true });
+}));
+
+app.delete('/api/workspaces/:id/run', wrap(async (req, res) => {
+  const s = sessions.get(`${req.params.id}:run`);
+  if (s?.alive) req.query.force === '1' ? s.proc.kill('SIGKILL') : s.kill();
+  setTimeout(() => pushWorkspace(req.params.id), 200);
+  res.json({ ok: true });
+}));
+
+// PR for the workspace branch, through the user's gh login.
+app.get('/api/workspaces/:id/pr', wrap(async (req, res) => {
+  const ws = getWorkspace(req.params.id);
+  if (!ws?.branch) return res.json(null);
+  const fields = 'number,title,url,state,isDraft,reviewDecision,statusCheckRollup,comments,reviews,headRefName,baseRefName';
+  execFile(GH || 'gh', ['pr', 'view', ws.branch, '--json', fields], { cwd: ws.cwd, maxBuffer: 10 * 1024 * 1024 }, (e, out) => {
+    if (e) return res.json(null);
+    try { res.json(JSON.parse(out)); } catch { res.json(null); }
+  });
+}));
+
 app.post('/api/workspaces/:id/stop', wrap(async (req, res) => {
   sessions.get(`${req.params.id}:agent`)?.kill();
   res.json({ ok: true });
@@ -372,6 +447,51 @@ app.get('/api/workspaces/:id/diff', wrap(async (req, res) => {
   res.json(await git.diff(ws));
 }));
 
+app.get('/api/workspaces/:id/changes', wrap(async (req, res) => {
+  const ws = getWorkspace(req.params.id);
+  if (!ws) throw new Error('workspace introuvable');
+  res.json({ base: ws.base_branch || (await git.currentBranch(ws.cwd)), files: await git.changedFiles(ws), commits: await git.commits(ws) });
+}));
+
+app.get('/api/workspaces/:id/commit/:sha', wrap(async (req, res) => {
+  const ws = getWorkspace(req.params.id);
+  if (!ws) throw new Error('workspace introuvable');
+  res.json({ patch: await git.showCommit(ws, req.params.sha) });
+}));
+
+app.get('/api/workspaces/:id/files', wrap(async (req, res) => {
+  const ws = getWorkspace(req.params.id);
+  if (!ws) throw new Error('workspace introuvable');
+  res.json(await git.listFiles(ws.cwd));
+}));
+
+app.get('/api/workspaces/:id/file', wrap(async (req, res) => {
+  const ws = getWorkspace(req.params.id);
+  if (!ws) throw new Error('workspace introuvable');
+  const root = real(ws.cwd);
+  const file = real(path.resolve(root, String(req.query.path || '')));
+  if (!file.startsWith(root + '/')) throw new Error('chemin hors du workspace');
+  const st = fs.statSync(file);
+  if (st.size > 1_000_000) return res.json({ binary: true, size: st.size });
+  const buf = fs.readFileSync(file);
+  res.json(buf.includes(0) ? { binary: true, size: st.size } : { content: buf.toString() });
+}));
+
+app.get('/api/prompts', (req, res) => {
+  const rows = db.prepare("SELECT text, MAX(at) AS at FROM events WHERE kind = 'prompt' AND text <> '' GROUP BY text ORDER BY at DESC LIMIT 100").all();
+  res.json(rows);
+});
+
+// Attachments are saved on disk and handed to Claude as @file references.
+app.post('/api/attachments', express.raw({ type: '*/*', limit: '10mb' }), (req, res) => {
+  const name = path.basename(String(req.query.name || 'fichier')).replace(/[^\w.\- ]/g, '_') || 'fichier';
+  const dir = path.join(HUB_DIR, 'attachments', uid());
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, req.body);
+  res.json({ path: file, name, size: req.body.length });
+});
+
 app.get('/api/workspaces/:id/events', (req, res) => {
   res.json(db.prepare('SELECT * FROM events WHERE workspace_id = ? ORDER BY at DESC LIMIT 100').all(req.params.id));
 });
@@ -383,6 +503,14 @@ const OPENERS = {
   terminal: ['open', ['-a', 'Terminal']],
   iterm: ['open', ['-a', 'iTerm']],
 };
+app.post('/api/projects/:id/open', wrap(async (req, res) => {
+  const p = getProject(req.params.id);
+  const o = OPENERS[req.body.app];
+  if (!p || !o) throw new Error('cible inconnue');
+  await new Promise((ok, ko) => execFile(o[0], [...o[1], p.path], (e) => (e ? ko(new Error(`impossible d'ouvrir avec ${req.body.app}`)) : ok())));
+  res.json({ ok: true });
+}));
+
 app.post('/api/workspaces/:id/open', wrap(async (req, res) => {
   const ws = getWorkspace(req.params.id);
   const o = OPENERS[req.body.app];

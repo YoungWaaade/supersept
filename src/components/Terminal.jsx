@@ -115,6 +115,10 @@ export function killTerminal(key) {
   setTimeout(() => { e.sock?.close(); e.term.dispose(); }, 50);
 }
 
+export function sendInput(key, data) {
+  pool.get(key)?.send({ type: 'input', data });
+}
+
 export function focusTerminal(key) {
   pool.get(key)?.term.focus();
 }

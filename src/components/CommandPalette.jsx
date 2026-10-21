@@ -27,7 +27,7 @@ export default function CommandPalette({ data, projectsById, go, onClose, onNew 
       label: w.name, hint: projectsById[w.project_id]?.name ?? 'Session', icon: <WorkspaceIcon ws={w} />, run: () => go({ kind: 'ws', id: w.id }),
     })));
     const ps = data.projects.filter((p) => has(p.name));
-    if (ps.length) out.push({ group: 'Projets' }, ...ps.map((p) => ({ label: p.name, icon: <ProjectThumbnail project={p} />, run: () => go({ kind: 'project', id: p.id }) })));
+    if (ps.length) out.push({ group: 'Projets' }, ...ps.map((p) => ({ label: p.name, icon: <ProjectThumbnail project={p} />, run: () => go({ kind: 'new', id: p.id }) })));
     const acts = actions.filter((a) => has(a.label));
     if (acts.length) out.push({ group: 'Actions' }, ...acts);
     if (t) {

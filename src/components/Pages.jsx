@@ -44,8 +44,8 @@ export function MemoryEditor({ memoryId }) {
   );
 }
 
-export function MemoryPage({ projects }) {
-  const [sel, setSel] = useState(projects[0]?.id ?? 'sessions');
+export function MemoryPage({ projects, initial }) {
+  const [sel, setSel] = useState(initial || projects[0]?.id || 'sessions');
   return (
     <div className="page">
       <PageHeader title="Mémoire" />
@@ -97,11 +97,11 @@ export async function resumeSession(s, go) {
   }
 }
 
-export function HistoryPage({ projects, go }) {
+export function HistoryPage({ projects, go, routeId }) {
   const [list, setList] = useState(null);
   const [q, setQ] = useState('');
-  const [project, setProject] = useState('all');
-  const highlight = location.hash.split('/')[2];
+  const [project, setProject] = useState(routeId?.startsWith('p-') ? routeId.slice(2) : 'all');
+  const highlight = routeId?.startsWith('p-') ? null : routeId;
   useEffect(() => { api.get('/api/history').then(setList); }, []);
   const projectsById = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p])), [projects]);
   const filtered = (list || []).filter((s) =>
