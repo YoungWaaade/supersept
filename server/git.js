@@ -46,12 +46,17 @@ export async function addWorktree(repo, dest, branch, base) {
   }
 }
 
-export async function removeWorktree(repo, dest) {
+// The owning repo is derived from the worktree itself, so this works even after the
+// workspace was moved to another project.
+export async function removeWorktree(dest) {
+  let repo = null;
+  try { repo = path.dirname(path.resolve(dest, (await git(dest, 'rev-parse', '--git-common-dir')).trim())); } catch {}
   try {
+    if (!repo) throw new Error('no repo');
     await git(repo, 'worktree', 'remove', '--force', dest);
   } catch {
     fs.rmSync(dest, { recursive: true, force: true });
-    await git(repo, 'worktree', 'prune').catch(() => {});
+    if (repo) await git(repo, 'worktree', 'prune').catch(() => {});
   }
 }
 

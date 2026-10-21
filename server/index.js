@@ -405,8 +405,15 @@ app.patch('/api/workspaces/:id', wrap(async (req, res) => {
   if (!ws) throw new Error('workspace introuvable');
   const status = req.body.status && ['idle', 'review', 'done'].includes(req.body.status) ? req.body.status : null;
   const base = typeof req.body.base_branch === 'string' && /^[\w./-]+$/.test(req.body.base_branch) ? req.body.base_branch : ws.base_branch;
-  db.prepare('UPDATE workspaces SET name = ?, archived = ?, base_branch = ?, updated_at = ? WHERE id = ?')
-    .run(req.body.name ?? ws.name, req.body.archived === undefined ? ws.archived : req.body.archived ? 1 : 0, base, now(), ws.id);
+  // Moving between projects (null = "Sessions"). Only grouping and memory change; the folder stays.
+  let projectId = ws.project_id;
+  if (req.body.project_id !== undefined) {
+    if (req.body.project_id !== null && !getProject(req.body.project_id)) throw new Error('projet introuvable');
+    projectId = req.body.project_id;
+  }
+  db.prepare('UPDATE workspaces SET name = ?, archived = ?, base_branch = ?, project_id = ?, updated_at = ? WHERE id = ?')
+    .run(req.body.name ?? ws.name, req.body.archived === undefined ? ws.archived : req.body.archived ? 1 : 0, base, projectId, now(), ws.id);
+  if (projectId !== ws.project_id) logEvent(ws.id, 'moved', getProject(projectId)?.name ?? 'Sessions');
   if (base !== ws.base_branch) refreshStats(ws.id);
   if (req.body.archived) killWorkspace(ws.id);
   if (status) setStatus(ws.id, status);
@@ -418,10 +425,7 @@ app.delete('/api/workspaces/:id', wrap(async (req, res) => {
   const ws = getWorkspace(req.params.id);
   if (!ws) throw new Error('workspace introuvable');
   killWorkspace(ws.id);
-  if (ws.is_worktree && req.query.removeWorktree === '1') {
-    const p = getProject(ws.project_id);
-    await git.removeWorktree(p.path, ws.cwd);
-  }
+  if (ws.is_worktree && req.query.removeWorktree === '1') await git.removeWorktree(ws.cwd);
   db.prepare('DELETE FROM workspaces WHERE id = ?').run(ws.id);
   fs.rmSync(path.join(HOOKS_DIR, `${ws.id}.json`), { force: true });
   statsCache.delete(ws.id);

@@ -743,3 +743,10 @@ body.resizing { user-select: none; cursor: col-resize; }
 .code .sign { display: inline-block; width: 14px; color: rgba(168, 165, 163, 0.5); user-select: none; }
 .code.viewer { font-size: 12px; line-height: 18px; }
 .code.viewer tr:hover { background: rgba(234, 232, 230, 0.03); }
+
+/* sidebar drag & drop */
+.sb-ws.dragging { opacity: 0.5; }
+.sb-project, .sb-section { border-radius: 8px; margin-left: 4px; margin-right: 4px; transition: background-color 120ms, box-shadow 120ms; }
+.sb-project .sb-project-row, .sb-project .sb-ws, .sb-section .sb-ws { margin-left: 4px; margin-right: 4px; }
+.sb-section .sb-section-header { padding-left: 10px; }
+.sb-project.drop, .sb-section.drop { background: rgba(234, 232, 230, 0.045); box-shadow: inset 0 0 0 1px rgba(234, 232, 230, 0.15); }

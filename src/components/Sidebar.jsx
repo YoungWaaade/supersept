@@ -3,6 +3,9 @@ import { LuPanelLeft, LuPanelLeftClose, LuPanelLeftOpen, LuArrowLeft, LuArrowRig
 import { HiChevronRight, HiMiniPlus, HiMiniXMark, HiOutlineCog6Tooth } from 'react-icons/hi2';
 import { VscNewFolder, VscFolderOpened, VscListFilter } from 'react-icons/vsc';
 import { WorkspaceIcon, ProjectThumbnail, DiffStats } from './ui.jsx';
+import { api } from '../api.js';
+
+const DND_TYPE = 'application/x-supersept-workspace';
 
 const DEFAULT_WIDTH = 271;
 const MIN_WIDTH = 220;
@@ -54,8 +57,42 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
   const activeWs = route.kind === 'ws' ? route.id : null;
   const shortcut = new Map(visible.slice(0, 9).map((w, i) => [w.id, `⌘⌥${i + 1}`]));
 
+  // Drag a workspace row onto a project (or the Sessions section) to move it there.
+  const [dragId, setDragId] = useState(null);
+  const [dropTarget, setDropTarget] = useState(null); // project id, or '__sessions__'
+  const dragged = data.workspaces.find((w) => w.id === dragId);
+  const dropProps = (target) => ({
+    onDragOver: (e) => {
+      if (!e.dataTransfer.types.includes(DND_TYPE)) return;
+      if ((dragged?.project_id ?? '__sessions__') === target) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (dropTarget !== target) setDropTarget(target);
+    },
+    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDropTarget((t) => (t === target ? null : t)); },
+    onDrop: (e) => {
+      e.preventDefault();
+      const id = e.dataTransfer.getData(DND_TYPE);
+      setDropTarget(null);
+      setDragId(null);
+      if (!id) return;
+      if (target !== '__sessions__') setClosedProjects((c) => ({ ...c, [target]: false }));
+      else setClosedSections((c) => ({ ...c, sessions: false }));
+      api.patch(`/api/workspaces/${id}`, { project_id: target === '__sessions__' ? null : target }).catch((err) => alert(err.message));
+    },
+  });
+  const dragProps = (w) => ({
+    draggable: true,
+    onDragStart: (e) => {
+      e.dataTransfer.setData(DND_TYPE, w.id);
+      e.dataTransfer.effectAllowed = 'move';
+      setDragId(w.id);
+    },
+    onDragEnd: () => { setDragId(null); setDropTarget(null); },
+  });
+
   const row = (w) => (
-    <WorkspaceRow key={w.id} ws={w} active={activeWs === w.id} shortcut={shortcut.get(w.id)} onClick={() => go({ kind: 'ws', id: w.id })} onClose={() => onCloseWorkspace(w)} onContextMenu={(e) => { e.preventDefault(); onContextMenu(w, e); }} />
+    <WorkspaceRow key={w.id} ws={w} active={activeWs === w.id} shortcut={shortcut.get(w.id)} dragging={dragId === w.id} dragProps={dragProps(w)} onClick={() => go({ kind: 'ws', id: w.id })} onClose={() => onCloseWorkspace(w)} onContextMenu={(e) => { e.preventDefault(); onContextMenu(w, e); }} />
   );
 
   if (collapsed) {
@@ -114,7 +151,7 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
         </div>
 
         <div className="sb-scroll">
-          <div className="sb-section">
+          <div className={`sb-section ${dropTarget === '__sessions__' ? 'drop' : ''}`} {...dropProps('__sessions__')}>
             <SectionHeader label="Sessions" closed={closedSections.sessions} onToggle={() => setClosedSections({ ...closedSections, sessions: !closedSections.sessions })}>
               <button className="sb-iconbtn size-6" title="Nouvelle session" onClick={onNewSession}><LuPlus size={14} /></button>
             </SectionHeader>
@@ -138,7 +175,7 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
             const list = visible.filter((w) => w.project_id === p.id && (matches(w) || p.name.toLowerCase().includes(q)));
             const open = !closedProjects[p.id] || !!q;
             return (
-              <div className="sb-project" key={p.id}>
+              <div className={`sb-project ${dropTarget === p.id ? 'drop' : ''}`} key={p.id} {...dropProps(p.id)}>
                 <div className="sb-project-row" role="button"
                   onClick={() => setClosedProjects({ ...closedProjects, [p.id]: !closedProjects[p.id] })}
                   onContextMenu={(e) => { e.preventDefault(); onProjectMenu(p, e); }}>
@@ -215,11 +252,11 @@ function SortButton({ sort, setSort }) {
   );
 }
 
-function WorkspaceRow({ ws, active, shortcut, onClick, onClose, onContextMenu }) {
+function WorkspaceRow({ ws, active, shortcut, onClick, onClose, onContextMenu, dragging, dragProps }) {
   const ref = useRef(null);
   useEffect(() => { if (active) ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, [active]);
   return (
-    <div ref={ref} className={`sb-ws ${active ? 'active' : ''}`}>
+    <div ref={ref} className={`sb-ws ${active ? 'active' : ''} ${dragging ? 'dragging' : ''}`} {...dragProps}>
       <div className="sb-ws-inner" role="button" onClick={onClick} onContextMenu={onContextMenu} title={ws.cwd}>
         <span className="sb-ws-icon"><WorkspaceIcon ws={ws} active={active} /></span>
         <div className="sb-ws-grid">
