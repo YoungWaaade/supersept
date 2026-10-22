@@ -10,6 +10,8 @@ import AddProject from './components/AddProject.jsx';
 import CommandPalette from './components/CommandPalette.jsx';
 import WorkspaceMenu from './components/WorkspaceMenu.jsx';
 import Empty from './components/Empty.jsx';
+import MobileApp from './components/MobileApp.jsx';
+import { isPhone } from './components/Terminal.jsx';
 
 function parseHash() {
   const [, kind, id] = location.hash.split('/');
@@ -100,6 +102,8 @@ export default function App() {
 
   const projectsById = useMemo(() => Object.fromEntries(data.projects.map((p) => [p.id, p])), [data.projects]);
 
+  if (isPhone) return <MobileApp data={data} projectsById={projectsById} route={route} go={go} connected={connected} load={load} />;
+
   let main;
   if (route.kind === 'ws' && current) {
     main = <WorkspaceView key={current.id} ws={current} project={projectsById[current.project_id]} go={go} onFork={fork} rightOpen={rightOpen} setRightOpen={setRightOpen} />;
@@ -146,9 +150,9 @@ function notify(ws, projects, route) {
   if (ws.status !== 'review' && ws.status !== 'waiting') return;
   if (!document.hidden && route.kind === 'ws' && route.id === ws.id) return;
   const project = projects.find((p) => p.id === ws.project_id);
-  const n = new Notification(`${project ? project.name + ' · ' : ''}${ws.name}`, {
-    body: ws.status === 'waiting' ? ws.last_message || STATUS.waiting.label : (ws.last_message || 'Terminé, à revoir').slice(0, 180),
-    tag: ws.id,
-  });
+  const title = `${project ? project.name + ' · ' : ''}${ws.name}`;
+  const body = ws.status === 'waiting' ? ws.last_message || STATUS.waiting.label : (ws.last_message || 'Terminé, à revoir').slice(0, 180);
+  let n;
+  try { n = new Notification(title, { body, tag: ws.id }); } catch { return; } // iOS: only Web Push, the constructor throws
   n.onclick = () => { focus(); location.hash = `#/ws/${ws.id}`; n.close(); };
 }

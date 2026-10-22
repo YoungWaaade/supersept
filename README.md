@@ -51,6 +51,18 @@ Supersept tourne tant que le terminal reste ouvert.
 
 Raccourcis : ⌘N nouvel espace · ⌘K rechercher · ⌘T terminal · ⌘D diviser · ⌘⌥1…9 aller à l'espace n · ⇧↵ nouvelle ligne dans Claude.
 
+## Depuis ton iPhone
+
+Supersept a une vue mobile : liste des espaces (ceux qui attendent ta réponse en premier), terminal de Claude avec une barre de saisie et les touches qui manquent au clavier iOS (Esc, flèches, ⇧Tab, ^C…), et création d'un nouvel espace.
+
+1. Sur le Mac : **Réglages → Accès depuis le téléphone → Activer**.
+2. Scanne le QR code avec l'appareil photo de l'iPhone, puis dans Safari : **Partager → Sur l'écran d'accueil**. Tu as une icône Supersept qui s'ouvre en plein écran comme une app.
+3. Pour y accéder hors de chez toi, installe [Tailscale](https://tailscale.com/download) sur le Mac et l'iPhone (même compte) : un QR code « Tailscale » apparaît. Sans Tailscale, ça ne marche que sur le même Wi‑Fi.
+
+Si l'iPhone n'arrive pas à se connecter, le pare-feu de macOS bloque peut-être `node` : Réglages Système → Réseau → Pare-feu → Options, et autorise les connexions entrantes pour `node`.
+
+Le Mac doit rester allumé et réveillé (Réglages Système → Batterie → Options → empêcher la suspension automatique sur secteur). Le terminal est partagé avec le Mac : il prend la taille de l'écran qui l'a utilisé en dernier.
+
 ## Où sont les données
 
 Tout est dans `~/.claude-hub/` :
@@ -61,6 +73,7 @@ Tout est dans `~/.claude-hub/` :
 | `memory/<projet>.md` | la mémoire de chaque projet |
 | `worktrees/` | les git worktrees créés par Supersept |
 | `attachments/` | les pièces jointes envoyées à Claude |
+| `remote.json` | l'accès téléphone (activé ou non, jeton d'appairage) |
 
 Les conversations elles-mêmes restent celles de Claude Code (`~/.claude/projects`).
 
@@ -68,11 +81,12 @@ Les conversations elles-mêmes restent celles de Claude Code (`~/.claude/project
 
 Supersept peut lancer des terminaux sur ta machine, il est donc verrouillé :
 
-- il n'écoute que sur `127.0.0.1` : il est inaccessible depuis le réseau ;
+- il n'écoute que sur `127.0.0.1` : il est inaccessible depuis le réseau, sauf si tu actives l'accès téléphone ;
+- avec l'accès téléphone, seuls les appareils qui ont scanné le QR code (un jeton secret) peuvent se connecter. « Révoquer » change le jeton et déconnecte tous les téléphones. Sur un Wi‑Fi partagé, préfère Tailscale : le trafic local n'est pas chiffré ;
 - il refuse les requêtes venant d'autres sites web, de sorte qu'une page ouverte dans ton navigateur ne peut pas le piloter ;
 - les agents Claude gardent leur mode de permissions habituel.
 
-Ne l'expose pas sur internet (pas de Vercel, de tunnel public ou de port forwarding).
+Ne l'expose pas sur internet (pas de Vercel, de tunnel public ou de port forwarding) : pour y accéder de l'extérieur, passe par Tailscale.
 
 ## Mise à jour
 

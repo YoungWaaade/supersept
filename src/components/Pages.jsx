@@ -132,7 +132,7 @@ export function HistoryPage({ projects, go, routeId }) {
 export function SettingsPage({ me }) {
   const [perm, setPerm] = useState(() => ('Notification' in window ? Notification.permission : 'unsupported'));
   const rows = me ? [
-    ['Serveur', `http://localhost:${me.port} (127.0.0.1 uniquement)`],
+    ['Serveur', `http://localhost:${me.port}`],
     ['Claude Code', me.claude],
     ['Données', `${me.hubDir} — base, mémoires, worktrees`],
     ['Historique lu depuis', `${me.home}/.claude/projects`],
@@ -151,6 +151,7 @@ export function SettingsPage({ me }) {
               )}
             </div>
           </section>
+          <RemoteAccess />
           <section>
             <h2>Emplacements</h2>
             {rows.map(([k, v]) => (
@@ -166,5 +167,53 @@ export function SettingsPage({ me }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// Phone access: the Mac listens on the network, a QR code carries the pairing token.
+function RemoteAccess() {
+  const [st, setSt] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.get('/api/remote').then(setSt).catch(() => {}); }, []);
+  const call = async (url, body) => {
+    setBusy(true);
+    try { setSt(await api.post(url, body)); } catch (e) { alert(e.message); }
+    setBusy(false);
+  };
+  if (!st) return null;
+  return (
+    <section>
+      <h2>Accès depuis le téléphone</h2>
+      <div className="settings-row">
+        <span>Piloter tes sessions depuis ton iPhone (Safari, puis « Sur l'écran d'accueil »)</span>
+        {st.enabled
+          ? <button className="btn-ghost" disabled={busy} onClick={() => call('/api/remote', { enabled: false })}>Désactiver</button>
+          : <button className="btn-ghost" disabled={busy} onClick={() => call('/api/remote', { enabled: true })}>Activer</button>}
+      </div>
+      {st.enabled && (
+        <>
+          {!st.addresses.length && <p className="remote-hint">Aucun réseau détecté. Connecte le Mac au Wi‑Fi ou à Tailscale.</p>}
+          <div className="remote-qrs">
+            {st.addresses.map((a) => (
+              <div key={a.address} className="remote-qr">
+                <div className="remote-qr-img" dangerouslySetInnerHTML={{ __html: a.qr }} />
+                <strong>{a.label}</strong>
+                <code>{a.address}</code>
+                <span className="muted">{a.tailscale ? 'Marche partout, chiffré' : 'Même Wi‑Fi uniquement'}</span>
+              </div>
+            ))}
+          </div>
+          <p className="remote-hint">
+            Scanne avec l'appareil photo de l'iPhone, puis dans Safari : Partager → Sur l'écran d'accueil.
+            Ce QR code donne un accès complet à tes sessions, ne le partage pas.
+            {!st.addresses.some((a) => a.tailscale) && <> Pour y accéder hors de chez toi, installe <a href="https://tailscale.com/download" target="_blank" rel="noreferrer">Tailscale</a> sur le Mac et l'iPhone.</>}
+          </p>
+          <div className="settings-row">
+            <span>Déconnecter tous les téléphones reliés (nouveau QR code)</span>
+            <button className="btn-ghost" disabled={busy} onClick={() => confirm('Déconnecter tous les téléphones ?') && call('/api/remote/rotate')}>Révoquer</button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }

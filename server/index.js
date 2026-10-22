@@ -11,6 +11,7 @@ import { db, HUB_DIR, HOOKS_DIR, WORKTREES_DIR, MEMORY_DIR, memoryFile } from '.
 import * as git from './git.js';
 import { listSessions, lastAssistantText } from './history.js';
 import { sessions, spawn, spawnShell, killWorkspace, which, homedir } from './pty.js';
+import * as remote from './remote.js';
 
 const PORT = Number(process.env.PORT || 4317);
 const HOST = '127.0.0.1';
@@ -209,9 +210,27 @@ app.use(express.json({ limit: '5mb' }));
 
 const ORIGINS = new Set([`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`, `http://supersept.localhost:${PORT}`, 'http://localhost:5173', 'http://127.0.0.1:5173']);
 const allowedOrigin = (o) => !o || ORIGINS.has(o);
+const dist = path.join(ROOT, 'dist');
+// This server can spawn processes: refuse cross-site requests, and anyone off this Mac without the phone token.
+function trusted(req) {
+  if (remote.isLoopback(req.socket.remoteAddress)) return allowedOrigin(req.headers.origin);
+  const o = req.headers.origin;
+  return remote.enabled() && remote.authed(req) && (!o || o === `http://${req.headers.host}`);
+}
 app.use((req, res, next) => {
-  // Refuse cross-site requests: this server can spawn processes.
-  if (!allowedOrigin(req.headers.origin)) return res.status(403).json({ error: 'origin refusée' });
+  const local = remote.isLoopback(req.socket.remoteAddress);
+  if (!local && remote.enabled() && req.path === '/pair') {
+    if (!remote.tokenOk(req.query.token)) return res.status(403).type('html').send(remote.PAIR_PAGE);
+    // Serve the app right here: "Add to Home Screen" keeps this URL, so the home screen app pairs itself on launch.
+    res.setHeader('Set-Cookie', remote.cookie());
+    return fs.existsSync(dist) ? res.sendFile(path.join(dist, 'index.html')) : res.redirect('/');
+  }
+  if (!trusted(req)) {
+    if (local) return res.status(403).json({ error: 'origin refusée' });
+    return res.status(remote.enabled() ? 401 : 403).type('html').send(remote.PAIR_PAGE);
+  }
+  // Hooks and pairing settings only make sense from the Mac itself.
+  if (!local && /^\/api\/(hook|remote)\b/.test(req.path)) return res.status(403).json({ error: 'réservé au Mac' });
   next();
 });
 
@@ -222,6 +241,24 @@ app.get('/api/state', (req, res) => res.json(state()));
 let fullName = null;
 try { fullName = execFileSync('id', ['-F'], { encoding: 'utf8' }).trim(); } catch {}
 app.get('/api/me', (req, res) => res.json({ name: fullName || os.userInfo().username, home: homedir, claude: CLAUDE, hubDir: HUB_DIR, port: PORT }));
+
+// ---------- phone access ----------
+const remoteSockets = new Set();
+const dropRemote = () => { for (const s of remoteSockets) s.destroy(); };
+// Re-bind once the response is out: 0.0.0.0 when phone access is on, 127.0.0.1 otherwise.
+const relisten = () => { server.close(); server.listen(PORT, remote.listenHost()); };
+app.get('/api/remote', wrap(async (req, res) => res.json(await remote.status(PORT))));
+app.post('/api/remote', wrap(async (req, res) => {
+  remote.setEnabled(!!req.body.enabled);
+  if (!remote.enabled()) dropRemote();
+  res.on('finish', relisten);
+  res.json(await remote.status(PORT));
+}));
+app.post('/api/remote/rotate', wrap(async (req, res) => {
+  remote.rotate();
+  dropRemote();
+  res.json(await remote.status(PORT));
+}));
 
 // ---------- GitHub: list repos, clone a repo into a new project, link a project ----------
 const SESSIONS_ROOT = path.join(homedir, 'claude sessions');
@@ -715,7 +752,12 @@ app.post('/api/hook/:id/:event', (req, res) => {
   }
 });
 
-const dist = path.join(ROOT, 'dist');
+app.get('/manifest.webmanifest', (req, res) => res.type('application/manifest+json').json({
+  name: 'Supersept', short_name: 'Supersept', display: 'standalone', background_color: '#151110', theme_color: '#151110',
+  start_url: remote.isLoopback(req.socket.remoteAddress) ? '/' : remote.pairPath(),
+  icons: [{ src: '/icon-512.png', sizes: '512x512', type: 'image/png' }],
+}));
+
 if (fs.existsSync(dist)) {
   app.use(express.static(dist));
   app.get(/^\/(?!api|ws).*/, (req, res) => res.sendFile(path.join(dist, 'index.html')));
@@ -725,8 +767,14 @@ if (fs.existsSync(dist)) {
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
+server.on('connection', (sock) => {
+  if (remote.isLoopback(sock.remoteAddress)) return;
+  remoteSockets.add(sock);
+  sock.on('close', () => remoteSockets.delete(sock));
+});
+
 server.on('upgrade', (req, socket, head) => {
-  if (!allowedOrigin(req.headers.origin)) return socket.destroy();
+  if (!trusted(req)) return socket.destroy();
   wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
 });
 
@@ -779,8 +827,8 @@ setInterval(() => {
 db.prepare("UPDATE workspaces SET status = 'idle' WHERE status IN ('working', 'waiting')").run();
 for (const { id } of db.prepare('SELECT id FROM workspaces WHERE archived = 0').all()) refreshStats(id);
 
-server.listen(PORT, HOST, () => {
-  console.log(`Supersept → http://localhost:${PORT}`);
+server.listen(PORT, remote.listenHost(), () => {
+  console.log(`Supersept → http://localhost:${PORT}${remote.enabled() ? ' (accès téléphone activé)' : ''}`);
   // Bring back the agents that were running when the hub stopped.
   for (const { id, name } of db.prepare('SELECT id, name FROM workspaces WHERE autostart = 1 AND archived = 0').all()) {
     try { startAgent(id); console.log(`  reprise : ${name}`); }

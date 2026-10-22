@@ -18,6 +18,9 @@ const THEME = {
 };
 const FONT = '"JetBrains Mono", "JetBrainsMono Nerd Font", "MesloLGM Nerd Font", "MesloLGM NF", "MesloLGS NF", "MesloLGS Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", "CaskaydiaCove Nerd Font", "Menlo", "Monaco", "Courier New", monospace';
 
+// Phones get a smaller font so Claude Code's TUI keeps enough columns.
+export const isPhone = matchMedia('(max-width: 760px) and (pointer: coarse)').matches;
+
 // Terminals outlive the component that shows them, so switching workspace keeps scrollback and the socket.
 const pool = new Map();
 
@@ -26,7 +29,7 @@ function create(key) {
   el.className = 'xterm-host';
   const term = new XTerm({
     fontFamily: FONT,
-    fontSize: 14,
+    fontSize: isPhone ? 11 : 14,
     lineHeight: 1,
     letterSpacing: 0,
     fontWeight: 'normal',
@@ -137,7 +140,8 @@ export function disposeTerminals(prefix) {
   }
 }
 
-export default function Terminal({ termKey, active = true }) {
+// keyboard=false: no on-screen keyboard when the terminal is tapped (the phone view has its own input bar).
+export default function Terminal({ termKey, active = true, keyboard = true }) {
   const box = useRef(null);
   useEffect(() => {
     const entry = pool.get(termKey) || create(termKey);
@@ -145,7 +149,8 @@ export default function Terminal({ termKey, active = true }) {
     if (!entry.opened) {
       entry.term.open(entry.el);
       entry.opened = true;
-      try {
+      // Mobile Safari keeps losing WebGL contexts: phones use the DOM renderer.
+      if (!isPhone) try {
         const webgl = new WebglAddon();
         webgl.onContextLoss(() => webgl.dispose());
         entry.term.loadAddon(webgl);
@@ -153,6 +158,7 @@ export default function Terminal({ termKey, active = true }) {
       entry.fit.fit();
       entry.connect();
     }
+    if (!keyboard) entry.term.textarea?.setAttribute('inputmode', 'none');
     const doFit = () => {
       if (!box.current?.offsetWidth) return;
       try {
@@ -164,8 +170,16 @@ export default function Terminal({ termKey, active = true }) {
     ro.observe(box.current);
     requestAnimationFrame(doFit);
     const host = box.current;
+    // The PTY is shared with other devices: take its size back when coming back to this one.
+    const onVisible = () => !document.hidden && doFit();
+    addEventListener('focus', doFit);
+    document.addEventListener('visibilitychange', onVisible);
+    host.addEventListener('focusin', doFit);
     return () => {
       ro.disconnect();
+      removeEventListener('focus', doFit);
+      document.removeEventListener('visibilitychange', onVisible);
+      host.removeEventListener('focusin', doFit);
       if (entry.el.parentNode === host) host.removeChild(entry.el);
     };
   }, [termKey]);
