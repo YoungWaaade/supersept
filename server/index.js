@@ -755,7 +755,7 @@ app.post('/api/hook/:id/:event', (req, res) => {
 app.get('/manifest.webmanifest', (req, res) => res.type('application/manifest+json').json({
   name: 'Supersept', short_name: 'Supersept', display: 'standalone', background_color: '#151110', theme_color: '#151110',
   start_url: remote.isLoopback(req.socket.remoteAddress) ? '/' : remote.pairPath(),
-  icons: [{ src: '/icon-512.png', sizes: '512x512', type: 'image/png' }],
+  icons: [{ src: '/icon.png', sizes: '400x400', type: 'image/png' }],
 }));
 
 if (fs.existsSync(dist)) {
