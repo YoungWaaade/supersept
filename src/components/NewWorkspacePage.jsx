@@ -6,6 +6,7 @@ import { VscFolderOpened } from 'react-icons/vsc';
 import { api, ago } from '../api.js';
 import { ProjectThumbnail } from './ui.jsx';
 import claudeLogo from '../assets/claude.svg';
+import { AgentIcon } from './AgentsPage.jsx';
 
 const PLACEHOLDERS = [
   'Nettoie les TODO obsolètes…',
@@ -60,7 +61,10 @@ function useToggle() {
   return [open, (k) => setOpen((o) => (o === k ? null : k)), () => setOpen(null)];
 }
 
-export default function NewWorkspacePage({ projects, initialProjectId, go, onAddProject, onCreated }) {
+export default function NewWorkspacePage({ projects, agents = [], initialProjectId, go, onAddProject, onCreated }) {
+  const [agentSlug, setAgentSlug] = useState(() => localStorage.getItem('nws-agent') || '');
+  const agent = agents.find((a) => a.slug === agentSlug) || null;
+  useEffect(() => localStorage.setItem('nws-agent', agent ? agentSlug : ''), [agentSlug, agent]);
   const [projectId, setProjectId] = useState(() => {
     if (initialProjectId === 'none') return '';
     if (initialProjectId && projects.some((p) => p.id === initialProjectId)) return initialProjectId;
@@ -134,6 +138,7 @@ export default function NewWorkspacePage({ projects, initialProjectId, go, onAdd
         baseBranch: base,
         prBranch: effectiveMode === 'worktree' ? pr?.headRefName : undefined,
         model, effort,
+        agent: agent?.slug || null,
       });
       setPrompt('');
       onCreated(w);
@@ -216,9 +221,18 @@ export default function NewWorkspacePage({ projects, initialProjectId, go, onAdd
           <div className="nws-footer" onMouseDown={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); editor.current?.focus(); } }}>
             <div className="nws-tools">
               <span className="menu-anchor">
-                <button type="button" className="nws-pill" onClick={() => toggle('agent')}><img src={claudeLogo} alt="" className="nws-pill-logo" /> Claude <LuChevronDown size={16} className="nws-chev" /></button>
-                <Menu open={open === 'agent'} onClose={close}>
-                  <button type="button" className="popover-item checked" onClick={close}><img src={claudeLogo} alt="" className="preset-icon" /> Claude</button>
+                <button type="button" className="nws-pill" onClick={() => toggle('agent')} title={agent?.description}>
+                  {agent ? <AgentIcon agent={agent} size={12} /> : <img src={claudeLogo} alt="" className="nws-pill-logo" />} {agent ? agent.label : 'Claude'} <LuChevronDown size={16} className="nws-chev" />
+                </button>
+                <Menu open={open === 'agent'} onClose={close} className="nws-agent-menu">
+                  <button type="button" className={`popover-item ${!agent ? 'checked' : ''}`} onClick={() => { setAgentSlug(''); close(); }}><img src={claudeLogo} alt="" className="preset-icon" /> Claude</button>
+                  {agents.map((a) => (
+                    <button key={a.slug} type="button" className={`popover-item ${agent?.slug === a.slug ? 'checked' : ''}`} onClick={() => { setAgentSlug(a.slug); close(); }} title={a.description}>
+                      <AgentIcon agent={a} /> <span className="flex-1 fade-r">{a.label}</span>
+                    </button>
+                  ))}
+                  <div className="popover-sep" />
+                  <button type="button" className="popover-item" onClick={() => go({ kind: 'agents' })}><LuSettings2 size={16} /> Gérer les agents…</button>
                 </Menu>
               </span>
               <PillSelect id="model" value={model} options={MODELS} onChange={setModel} open={open} toggle={toggle} close={close} />

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { LuPanelLeft, LuPanelLeftClose, LuPanelLeftOpen, LuArrowLeft, LuArrowRight, LuPlus, LuSearch, LuLayers, LuBrain, LuHistory } from 'react-icons/lu';
+import { LuPanelLeft, LuPanelLeftClose, LuPanelLeftOpen, LuArrowLeft, LuArrowRight, LuPlus, LuSearch, LuLayers, LuBrain, LuHistory, LuBot } from 'react-icons/lu';
 import { HiChevronRight, HiMiniPlus, HiMiniXMark, HiOutlineCog6Tooth } from 'react-icons/hi2';
 import { VscNewFolder, VscFolderOpened, VscListFilter, VscGithubAlt } from 'react-icons/vsc';
 import { WorkspaceIcon, ProjectThumbnail, DiffStats } from './ui.jsx';
@@ -17,6 +17,7 @@ const NAV = [
   { kind: 'search', label: 'Rechercher', Icon: LuSearch, kbd: '⌘K' },
   { kind: 'board', label: 'Espaces de travail', Icon: LuLayers },
   { kind: 'memory', label: 'Mémoire', Icon: LuBrain },
+  { kind: 'agents', label: 'Agents', Icon: LuBot },
   { kind: 'history', label: 'Historique', Icon: LuHistory },
 ];
 

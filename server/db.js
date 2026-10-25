@@ -113,5 +113,14 @@ addColumn('workspaces', 'effort', 'TEXT');
 addColumn('workspaces', 'permission_mode', 'TEXT');
 addColumn('projects', 'run_command', 'TEXT');
 addColumn('workspaces', 'autostart', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('workspaces', 'agent', 'TEXT');
+// Extra agent tabs inside a workspace: each one is its own Claude conversation.
+db.exec(`CREATE TABLE IF NOT EXISTS agent_tabs (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+)`);
 
 export const memoryFile = (projectId) => path.join(MEMORY_DIR, `${projectId}.md`);

@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { db, HUB_DIR, HOOKS_DIR, WORKTREES_DIR, MEMORY_DIR, memoryFile } from './db.js';
 import * as git from './git.js';
 import { listSessions, lastAssistantText } from './history.js';
+import { listAgents, getAgent, saveAgent, deleteAgent, isSlug, slugify } from './agents.js';
 import { sessions, spawn, spawnShell, killWorkspace, which, homedir } from './pty.js';
 import * as remote from './remote.js';
 
@@ -51,7 +52,7 @@ function decorate(ws) {
 function state() {
   const projects = db.prepare('SELECT * FROM projects ORDER BY sort, created_at').all().map((p) => ({ ...p, has_icon: !!projectIcon(p), github: githubRepo(p.path) }));
   const workspaces = db.prepare('SELECT * FROM workspaces ORDER BY created_at DESC').all().map(decorate);
-  return { projects, workspaces };
+  return { projects, workspaces, agents: listAgents() };
 }
 
 function pushWorkspace(id) {
@@ -157,16 +158,22 @@ function startAgent(wsId) {
     if (pid) throw Object.assign(new Error(`Cette conversation est encore ouverte dans un autre terminal (process ${pid}, par exemple un onglet iTerm).\r\nFerme-la là-bas : elle reprendra ici automatiquement.`), { busy: true });
   }
   const args = ['--settings', hookSettings(ws.id), '--add-dir', MEMORY_DIR, '--append-system-prompt', systemPrompt(ws, project), '-n', ws.name];
+  // A custom agent brings its own instructions/model; the workspace's explicit choices win.
+  const agent = ws.agent ? getAgent(ws.agent) : null;
+  if (agent) args.push('--agent', agent.slug);
   if (ws.model) args.push('--model', ws.model);
-  if (ws.effort) args.push('--effort', ws.effort);
-  if (ws.permission_mode) args.push('--permission-mode', ws.permission_mode);
+  const effort = ws.effort || agent?.effort;
+  if (effort) args.push('--effort', effort);
+  const mode = ws.permission_mode || agent?.permissionMode;
+  if (mode) args.push('--permission-mode', mode);
   if (ws.has_conversation) {
     args.push('--resume', ws.session_id);
     if (ws.fork_pending) args.push('--fork-session');
   }
   else {
     args.push('--session-id', ws.session_id);
-    if (ws.initial_prompt) args.push(ws.initial_prompt);
+    const first = ws.initial_prompt || agent?.initialPrompt;
+    if (first) args.push(first);
   }
   // autostart marks agents to bring back if the hub restarts (update, crash, reboot).
   db.prepare('UPDATE workspaces SET autostart = 1 WHERE id = ?').run(ws.id);
@@ -192,6 +199,31 @@ function startRun(wsId) {
   return s;
 }
 
+// Claude Code stores a conversation once it has a first message: that's when to resume it.
+const transcriptExists = (cwd, sessionId) => fs.existsSync(path.join(homedir, '.claude', 'projects', real(cwd).replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`));
+
+// A secondary tab running a custom agent in the workspace folder, with its own conversation.
+function startAgentTab(wsId, tabId) {
+  const ws = getWorkspace(wsId);
+  const tab = db.prepare('SELECT * FROM agent_tabs WHERE id = ? AND workspace_id = ?').get(tabId, wsId);
+  if (!ws || !tab) throw new Error('onglet introuvable');
+  const agent = getAgent(tab.agent);
+  if (!agent) throw new Error(`l'agent « ${tab.agent} » n'existe plus`);
+  const project = ws.project_id ? getProject(ws.project_id) : null;
+  const args = ['--agent', agent.slug, '--add-dir', MEMORY_DIR, '--append-system-prompt', systemPrompt(ws, project), '-n', `${agent.label} · ${ws.name}`];
+  if (agent.effort) args.push('--effort', agent.effort);
+  if (agent.permissionMode) args.push('--permission-mode', agent.permissionMode);
+  if (transcriptExists(ws.cwd, tab.session_id)) {
+    const pid = externalHolder(tab.session_id);
+    if (pid) throw Object.assign(new Error(`Cette conversation est encore ouverte ailleurs (process ${pid}).`), { busy: true });
+    args.push('--resume', tab.session_id);
+  } else {
+    args.push('--session-id', tab.session_id);
+    if (agent.initialPrompt) args.push(agent.initialPrompt);
+  }
+  return spawn(`${wsId}:ag-${tabId}`, CLAUDE, args, ws.cwd, { env: { CLAUDE_HUB_WORKSPACE: ws.id } });
+}
+
 function ensureSession(key) {
   const existing = sessions.get(key);
   if (existing) return existing;
@@ -201,6 +233,7 @@ function ensureSession(key) {
   if (kind === 'agent') return startAgent(wsId);
   if (/^shell(-[\w]+)?$/.test(kind)) return spawnShell(key, ws.cwd);
   if (kind === 'run') return startRun(wsId);
+  if (kind?.startsWith('ag-')) return startAgentTab(wsId, kind.slice(3));
   return null;
 }
 
@@ -548,6 +581,7 @@ app.post('/api/workspaces', wrap(async (req, res) => {
   const MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
   const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
   const MODES = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'plan'];
+  if (req.body.agent && getAgent(req.body.agent)) db.prepare('UPDATE workspaces SET agent = ? WHERE id = ?').run(req.body.agent, id);
   db.prepare('UPDATE workspaces SET model = ?, effort = ?, permission_mode = ? WHERE id = ?').run(
     MODELS.includes(req.body.model) ? req.body.model : null,
     EFFORTS.includes(req.body.effort) ? req.body.effort : null,
@@ -665,6 +699,48 @@ app.get('/api/workspaces/:id/file', wrap(async (req, res) => {
   if (st.size > 1_000_000) return res.json({ binary: true, size: st.size });
   const buf = fs.readFileSync(file);
   res.json(buf.includes(0) ? { binary: true, size: st.size } : { content: buf.toString() });
+}));
+
+app.get('/api/agents', (req, res) => res.json(listAgents()));
+
+app.put('/api/agents/:slug', wrap(async (req, res) => {
+  const slug = req.body.slug ? slugify(req.body.slug) : req.params.slug;
+  if (!isSlug(req.params.slug) && req.params.slug !== 'new') throw new Error('agent invalide');
+  if (slug !== req.params.slug && getAgent(slug)) throw new Error(`un agent « ${slug} » existe déjà`);
+  const a = saveAgent(slug, req.body);
+  if (req.params.slug !== 'new' && slug !== req.params.slug) {
+    deleteAgent(req.params.slug);
+    db.prepare('UPDATE workspaces SET agent = ? WHERE agent = ?').run(slug, req.params.slug);
+    db.prepare('UPDATE agent_tabs SET agent = ? WHERE agent = ?').run(slug, req.params.slug);
+  }
+  broadcast({ type: 'reload' });
+  res.json(a);
+}));
+
+app.delete('/api/agents/:slug', wrap(async (req, res) => {
+  deleteAgent(req.params.slug);
+  broadcast({ type: 'reload' });
+  res.json({ ok: true });
+}));
+
+app.post('/api/workspaces/:id/agent-tabs', wrap(async (req, res) => {
+  const ws = getWorkspace(req.params.id);
+  if (!ws) throw new Error('workspace introuvable');
+  if (!getAgent(req.body.agent)) throw new Error('agent introuvable');
+  const id = uid();
+  db.prepare('INSERT INTO agent_tabs (id, workspace_id, agent, session_id, created_at) VALUES (?, ?, ?, ?, ?)').run(id, ws.id, req.body.agent, crypto.randomUUID(), now());
+  res.json({ id, pane: `ag-${id}` });
+}));
+
+app.get('/api/workspaces/:id/agent-tabs', (req, res) => {
+  res.json(db.prepare('SELECT id, agent FROM agent_tabs WHERE workspace_id = ?').all(req.params.id));
+});
+
+app.delete('/api/workspaces/:id/agent-tabs/:tab', wrap(async (req, res) => {
+  sessions.get(`${req.params.id}:ag-${req.params.tab}`)?.kill();
+  sessions.delete(`${req.params.id}:ag-${req.params.tab}`);
+  db.prepare('DELETE FROM agent_tabs WHERE id = ? AND workspace_id = ?').run(req.params.tab, req.params.id);
+  res.json({ ok: true });
 }));
 
 app.get('/api/prompts', (req, res) => {

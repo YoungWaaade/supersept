@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { LuPlus, LuSettings, LuPanelRight, LuPanelRightOpen, LuPanelRightClose, LuZap, LuCopy, LuGitFork, LuSquarePen, LuSquareTerminal, LuX, LuCheck, LuGitCompareArrows, LuFile, LuPlay } from 'react-icons/lu';
 import { HiMiniXMark, HiMiniCommandLine } from 'react-icons/hi2';
 import { TbLayoutColumns } from 'react-icons/tb';
@@ -8,6 +8,16 @@ import DiffView, { FileViewer } from './DiffView.jsx';
 import RightPanel from './RightPanel.jsx';
 import { StatusIndicator } from './ui.jsx';
 import claudeLogo from '../assets/claude.svg';
+import { AgentIcon } from './AgentsPage.jsx';
+
+// Which custom agent runs in a pane: 'agent' = the workspace's main session, 'ag-<id>' = an agent tab.
+const AgentsCtx = createContext({ agentOf: () => null });
+const useAgentOf = () => useContext(AgentsCtx).agentOf;
+function PaneIcon({ pane, size = 14 }) {
+  const agent = useAgentOf()(pane);
+  if (agent) return <AgentIcon agent={agent} size={size} />;
+  return pane === 'agent' ? <img src={claudeLogo} alt="" className="preset-icon" /> : null;
+}
 
 const rid = () => Math.random().toString(36).slice(2, 8);
 const DEFAULT_TABS = { tabs: [{ id: 'main', panes: ['agent'], active: 'agent' }], active: 'main' };
@@ -21,12 +31,24 @@ function useTabs(wsId) {
   return [state, setState];
 }
 
-export default function WorkspaceView({ ws, project, go, onFork, rightOpen, setRightOpen }) {
+export default function WorkspaceView({ ws, project, agents, go, onFork, rightOpen, setRightOpen }) {
   const [state, setState] = useTabs(ws.id);
+  const [agentTabs, setAgentTabs] = useState({}); // tab id → agent slug
+  const loadAgentTabs = () => api.get(`/api/workspaces/${ws.id}/agent-tabs`).then((rows) => setAgentTabs(Object.fromEntries(rows.map((r) => [r.id, r.agent]))));
+  useEffect(() => { loadAgentTabs(); }, [ws.id]);
+  const bySlug = (slug) => agents.find((a) => a.slug === slug) || null;
+  const agentOf = (pane) => (pane === 'agent' ? bySlug(ws.agent) : pane?.startsWith('ag-') ? bySlug(agentTabs[pane.slice(3)]) || { label: agentTabs[pane.slice(3)] || 'Agent' } : null);
+  const openAgentTab = async (slug) => {
+    try {
+      const { pane, id } = await api.post(`/api/workspaces/${ws.id}/agent-tabs`, { agent: slug });
+      setAgentTabs((t) => ({ ...t, [id]: slug }));
+      openTab(pane);
+    } catch (e) { alert(e.message); }
+  };
   const [addMenu, setAddMenu] = useState(false);
   const [toggleHover, setToggleHover] = useState(false);
   const termKey = (pane) => `${ws.id}:${pane}`;
-  const isTerminal = (pane) => pane === 'agent' || pane === 'run' || pane.startsWith('shell-');
+  const isTerminal = (pane) => pane === 'agent' || pane === 'run' || pane.startsWith('shell-') || pane.startsWith('ag-');
 
   const update = (fn) => setState((s) => fn(structuredClone(s)));
   const openTab = (pane) => {
@@ -61,6 +83,8 @@ export default function WorkspaceView({ ws, project, go, onFork, rightOpen, setR
   const closePane = (tabId, pane) => {
     // The agent keeps running in the background when its pane is closed, like Superset.
     if (pane !== 'agent' && pane !== 'run' && isTerminal(pane)) killTerminal(termKey(pane));
+    // Closing an agent tab ends it; its conversation stays in the Claude Code history.
+    if (pane.startsWith('ag-')) api.del(`/api/workspaces/${ws.id}/agent-tabs/${pane.slice(3)}`).catch(() => {});
     update((s) => {
       const tab = s.tabs.find((t) => t.id === tabId);
       tab.panes = tab.panes.filter((p) => p !== pane);
@@ -100,6 +124,7 @@ export default function WorkspaceView({ ws, project, go, onFork, rightOpen, setR
   }, [state.active]);
 
   return (
+    <AgentsCtx.Provider value={{ agentOf }}>
     <div className="wsv">
      <div className="wsv-col">
       <div className="tabbar">
@@ -121,6 +146,12 @@ export default function WorkspaceView({ ws, project, go, onFork, rightOpen, setR
                     <button className="popover-item" onClick={() => { setAddMenu(false); openTab(`shell-${rid()}`); }}>
                       <HiMiniCommandLine size={14} /> Terminal <kbd className="popover-kbd">⌘T</kbd>
                     </button>
+                    {agents.length > 0 && <div className="popover-sep" />}
+                    {agents.map((ag) => (
+                      <button key={ag.slug} className="popover-item" onClick={() => { setAddMenu(false); openAgentTab(ag.slug); }}>
+                        <AgentIcon agent={ag} /> <span className="flex-1 fade-r">{ag.label}</span>
+                      </button>
+                    ))}
                   </Dropdown>
                 )}
               </span>
@@ -139,11 +170,16 @@ export default function WorkspaceView({ ws, project, go, onFork, rightOpen, setR
       <div className="wsv-body">
         <div className="wsv-main">
           <div className="presets">
-            <button className="preset-gear" title="Réglages" onClick={() => go({ kind: 'settings' })}><LuSettings size={14} strokeWidth={2} /></button>
+            <button className="preset-gear" title="Gérer les agents" onClick={() => go({ kind: 'agents' })}><LuSettings size={14} strokeWidth={2} /></button>
             <button className="preset" title={ws.running ? 'Afficher Claude' : ws.has_conversation ? 'Reprendre la conversation' : 'Lancer Claude'} onClick={showAgent}>
               <img src={claudeLogo} alt="" className="preset-icon" />
               <span>Claude</span>
             </button>
+            {agents.map((a) => (
+              <button key={a.slug} className="preset" title={`${a.description || a.label} — ouvre un onglet avec cet agent`} onClick={() => openAgentTab(a.slug)}>
+                <AgentIcon agent={a} /> <span>{a.label}</span>
+              </button>
+            ))}
           </div>
 
           <div className="tab-panels">
@@ -180,6 +216,7 @@ export default function WorkspaceView({ ws, project, go, onFork, rightOpen, setR
      </div>
       {rightOpen && <RightPanel ws={ws} project={project} go={go} onOpenDiff={openDiff} onOpenFile={openFile} onRun={openRun} sendToAgent={sendToAgent} />}
     </div>
+    </AgentsCtx.Provider>
   );
 }
 
@@ -218,8 +255,10 @@ function ViewerPane({ ws, pane, tab, onClose }) {
 
 function TabItem({ tab, active, termKey, onClick, onClose }) {
   const osc = useTerminalTitle(termKey);
-  const title = paneTitle(tab.panes.includes('agent') ? 'agent' : tab.active || tab.panes[0], osc);
-  const icon = tab.active === 'diff' ? <LuGitCompareArrows size={14} /> : tab.active?.startsWith('file:') ? <LuFile size={14} /> : tab.active === 'run' ? <LuPlay size={14} /> : null;
+  const agentOf = useAgentOf();
+  const main = tab.panes.includes('agent') ? 'agent' : tab.active || tab.panes[0];
+  const title = agentOf(main)?.label || paneTitle(main, osc);
+  const icon = agentOf(main) ? <PaneIcon pane={main} /> : tab.active === 'diff' ? <LuGitCompareArrows size={14} /> : tab.active?.startsWith('file:') ? <LuFile size={14} /> : tab.active === 'run' ? <LuPlay size={14} /> : null;
   return (
     <div className={`tab ${active ? 'active' : ''}`} onClick={onClick} title={title}>
       <div className="tab-title">{icon}<span className="tab-label fade-r">{title}</span></div>
@@ -232,11 +271,12 @@ function TabItem({ tab, active, termKey, onClick, onClose }) {
 
 function Pane({ ws, pane, termKey, visible, split, focused, onFocus, onSplit, onClose, onFork }) {
   const isAgent = pane === 'agent';
+  const agent = useAgentOf()(pane);
   const osc = useTerminalTitle(termKey);
   const [renaming, setRenaming] = useState(false);
   const [copied, setCopied] = useState(false);
   const input = useRef(null);
-  const title = isAgent ? osc || ws.name : pane === 'run' ? `Run · ${osc || 'commande du projet'}` : osc || 'Terminal';
+  const title = isAgent ? osc || ws.name : agent ? `${agent.label}${osc ? ` · ${osc}` : ''}` : pane === 'run' ? `Run · ${osc || 'commande du projet'}` : osc || 'Terminal';
 
   const rename = () => {
     const name = input.current.value.trim();
@@ -259,7 +299,7 @@ function Pane({ ws, pane, termKey, visible, split, focused, onFocus, onSplit, on
                 onKeyDown={(e) => { if (e.key === 'Enter') rename(); if (e.key === 'Escape') setRenaming(false); }} />
             ) : (
               <button className="pane-title" title={ws.cwd}>
-                {isAgent ? <img src={claudeLogo} alt="" className="preset-icon" /> : <LuSquareTerminal size={14} />}
+                {isAgent || agent ? <PaneIcon pane={pane} /> : <LuSquareTerminal size={14} />}
                 <span className="pane-title-text">{title}</span>
               </button>
             )}

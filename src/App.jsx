@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar.jsx';
 import WorkspaceView from './components/WorkspaceView.jsx';
 import Board from './components/Board.jsx';
 import ProjectMenu from './components/ProjectMenu.jsx';
+import AgentsPage from './components/AgentsPage.jsx';
 import { MemoryPage, HistoryPage, SettingsPage } from './components/Pages.jsx';
 import NewWorkspacePage from './components/NewWorkspacePage.jsx';
 import AddProject from './components/AddProject.jsx';
@@ -106,10 +107,12 @@ export default function App() {
 
   let main;
   if (route.kind === 'ws' && current) {
-    main = <WorkspaceView key={current.id} ws={current} project={projectsById[current.project_id]} go={go} onFork={fork} rightOpen={rightOpen} setRightOpen={setRightOpen} />;
+    main = <WorkspaceView key={current.id} ws={current} project={projectsById[current.project_id]} agents={data.agents || []} go={go} onFork={fork} rightOpen={rightOpen} setRightOpen={setRightOpen} />;
   } else if (route.kind === 'new') {
-    main = <NewWorkspacePage key={route.id || 'new'} projects={data.projects} initialProjectId={route.id} go={go}
+    main = <NewWorkspacePage key={route.id || 'new'} projects={data.projects} agents={data.agents || []} initialProjectId={route.id} go={go}
       onAddProject={() => setModal({ type: 'add-project' })} onCreated={(w) => load().then(() => go({ kind: 'ws', id: w.id }))} />;
+  } else if (route.kind === 'agents') {
+    main = <AgentsPage key={route.id || 'agents'} agents={data.agents || []} initial={route.id} />;
   } else if (route.kind === 'memory') main = <MemoryPage key={route.id || 'memory'} projects={data.projects} initial={route.id} />;
   else if (route.kind === 'history') main = <HistoryPage key={route.id || 'history'} projects={data.projects} go={go} routeId={route.id} />;
   else if (route.kind === 'settings') main = <SettingsPage me={me} />;

@@ -49,6 +49,14 @@ Supersept tourne tant que le terminal reste ouvert.
 3. La première fois dans un nouveau dossier, Claude Code demande si tu fais confiance au dossier : réponds dans le terminal.
 4. Suis tes agents dans la sidebar ou dans **Espaces de travail** (kanban). Clic droit sur un espace pour l'ouvrir dans VS Code ou Cursor, le forker, l'archiver, etc.
 
+### Agents
+
+Page **Agents** (sidebar, ou l'engrenage de la barre d'agents) : crée des agents Claude avec leur propre rôle, instructions, modèle, effort, permissions, outils autorisés et premier message.
+
+- Ils apparaissent dans la barre à côté de « Claude » : un clic ouvre un onglet avec cet agent dans l'espace en cours (sa propre conversation, reprise après un redémarrage).
+- Dans « Nouvel espace de travail », le sélecteur « Claude ▾ » permet de lancer tout l'espace avec un agent.
+- Ils sont enregistrés au format natif de Claude Code (`~/.claude/agents/<nom>.md`) : ils marchent aussi dans un terminal (`claude --agent <nom>`) et Claude peut les appeler en renfort pendant une session.
+
 Raccourcis : ⌘N nouvel espace · ⌘K rechercher · ⌘T terminal · ⌘D diviser · ⌘⌥1…9 aller à l'espace n · ⇧↵ nouvelle ligne dans Claude.
 
 ## Depuis ton iPhone

@@ -834,3 +834,19 @@ body.resizing { user-select: none; cursor: col-resize; }
 .m-chip { gap: 6px; height: 36px; padding: 0 12px; border-radius: 18px; border: 1px solid var(--ring); font-size: 14px; color: var(--muted-foreground); }
 .m-chip.on { color: var(--foreground); border-color: var(--foreground); background: var(--fill-selected); }
 .m-primary { justify-content: center; height: 46px; margin-top: 24px; border-radius: 12px; font-size: 16px; font-weight: 600; background: var(--foreground); color: var(--background); }
+
+/* agents */
+.agent-emoji { display: inline-flex; align-items: center; justify-content: center; flex: none; line-height: 1; font-family: 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif; }
+.agent-form { max-width: 760px; padding: 16px 20px 24px; overflow-y: auto; }
+.agent-row { display: flex; gap: 10px; }
+.agent-icon-field { width: 72px; flex: none; }
+.agent-icon-field input { text-align: center; font-size: 18px !important; padding: 4px !important; }
+.agent-prompt { min-height: 220px; font-family: var(--font-mono); font-size: 12.5px !important; line-height: 1.55 !important; }
+.agent-foot { align-items: center; }
+.btn-ghost.danger:hover { color: var(--red-400); }
+.small { font-size: 11px; }
+.nws-agent-menu { min-width: 220px; }
+.preset { max-width: 180px; }
+.preset > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.split-nav-item .flex-1 { text-align: left; }
+.popover-item .flex-1 { text-align: left; }
