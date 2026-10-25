@@ -850,3 +850,18 @@ body.resizing { user-select: none; cursor: col-resize; }
 .preset > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .split-nav-item .flex-1 { text-align: left; }
 .popover-item .flex-1 { text-align: left; }
+
+/* pixel bot avatars */
+.bot-avatar { flex: none; image-rendering: pixelated; }
+.preset .bot-avatar, .tab-title .bot-avatar, .pane-title .bot-avatar { margin: -1px 0; }
+.bot-builder { display: flex; gap: 20px; padding: 14px; border-radius: 12px; border: 1px solid var(--border); background: rgba(234, 232, 230, 0.02); }
+.bot-preview { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px 4px; }
+.bot-preview .bot-avatar { padding: 10px; border-radius: 14px; background: #1c1918; box-shadow: inset 0 0 0 1px var(--border); box-sizing: content-box; }
+.bot-parts { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.bot-row { display: flex; align-items: center; gap: 12px; }
+.bot-row-label { width: 74px; flex: none; font-size: 11px; font-weight: 500; color: var(--muted-foreground); }
+.bot-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.bot-option { justify-content: center; width: 38px; height: 38px; border-radius: 9px; border: 1px solid transparent; background: rgba(234, 232, 230, 0.03); transition: all 120ms; }
+.bot-option:hover { background: var(--fill-hover); }
+.bot-option.on { border-color: var(--primary); background: rgba(224, 120, 80, 0.1); }
+.bot-swatch { width: 18px; height: 18px; border-radius: 5px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25); }

@@ -8,7 +8,7 @@ import os from 'node:os';
 
 export const AGENTS_DIR = path.join(os.homedir(), '.claude', 'agents');
 const SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
-const FIELDS = ['name', 'description', 'model', 'tools', 'color', 'icon', 'effort', 'permissionMode', 'initialPrompt'];
+const FIELDS = ['name', 'description', 'model', 'tools', 'color', 'icon', 'avatar', 'effort', 'permissionMode', 'initialPrompt'];
 
 export const isSlug = (s) => SLUG.test(String(s || ''));
 export const slugify = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')

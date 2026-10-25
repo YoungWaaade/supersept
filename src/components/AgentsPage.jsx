@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react';
-import { LuPlus, LuTrash2, LuBot } from 'react-icons/lu';
+import { LuPlus, LuTrash2, LuDices } from 'react-icons/lu';
+import BotAvatar, { parseAvatar, avatarSpec, randomAvatar, BOT_COLORS, BOT_EYES, BOT_MOUTHS, BOT_ANTENNAS, BOT_ACCESSORIES, BOT_LABELS } from './BotAvatar.jsx';
 import { api } from '../api.js';
 import { PageHeader } from './Pages.jsx';
 
 const MODELS = [['', 'Modèle par défaut'], ['fable', 'Fable'], ['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku']];
 const EFFORTS = [['', 'Effort par défaut'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'xHigh'], ['max', 'Max']];
 const MODES = [['', 'Permissions par défaut'], ['manual', 'Demander à chaque action'], ['acceptEdits', 'Accepter les modifications de fichiers'], ['auto', 'Auto'], ['plan', 'Plan (lecture seule, propose un plan)']];
-const EMPTY = { label: '', icon: '🤖', description: '', prompt: '', model: '', effort: '', permissionMode: '', tools: '', initialPrompt: '' };
+const EMPTY = { label: '', avatar: '', description: '', prompt: '', model: '', effort: '', permissionMode: '', tools: '', initialPrompt: '' };
 
-export function AgentIcon({ agent, size = 14 }) {
-  return agent?.icon ? <span className="agent-emoji" style={{ fontSize: size, minWidth: size }}>{agent.icon}</span> : <LuBot size={size} />;
+// Every agent is a little pixel bot; agents without one get a stable bot derived from their name.
+export function AgentIcon({ agent, size = 16 }) {
+  return <BotAvatar spec={agent?.avatar} seed={agent?.slug || agent?.label} size={size} />;
 }
 
 export default function AgentsPage({ agents, initial }) {
@@ -62,14 +64,10 @@ function AgentEditor({ agent, onSaved, onDeleted }) {
 
   return (
     <form className="form agent-form" onSubmit={save}>
-      <div className="agent-row">
-        <label className="agent-icon-field">Icône
-          <input value={form.icon} onChange={(e) => set('icon', e.target.value)} maxLength={4} />
-        </label>
-        <label className="flex-1">Nom
-          <input autoFocus={!agent} value={form.label} onChange={(e) => set('label', e.target.value)} placeholder="ex. Relecteur Brand DS" />
-        </label>
-      </div>
+      <BotBuilder spec={form.avatar} seed={agent?.slug || form.label || 'nouveau'} onChange={(v) => set('avatar', v)} />
+      <label>Nom
+        <input autoFocus={!agent} value={form.label} onChange={(e) => set('label', e.target.value)} placeholder="ex. Relecteur Brand DS" />
+      </label>
       <label>Quand l'utiliser <span className="muted">— aide Claude à l'appeler en renfort pendant une session</span>
         <input value={form.description} onChange={(e) => set('description', e.target.value)} placeholder="ex. Vérifie les écrans Figma contre les tokens du Brand DS Pennylane" />
       </label>
@@ -101,5 +99,37 @@ function AgentEditor({ agent, onSaved, onDeleted }) {
         <button className="btn-primary">{saved ? 'Enregistré' : agent ? 'Enregistrer' : "Créer l'agent"}</button>
       </div>
     </form>
+  );
+}
+
+function BotBuilder({ spec, seed, onChange }) {
+  const a = parseAvatar(spec, seed);
+  const setPart = (k, v) => onChange(avatarSpec({ ...a, [k]: v }));
+  const Row = ({ label, part, options }) => (
+    <div className="bot-row">
+      <span className="bot-row-label">{label}</span>
+      <div className="bot-options">
+        {options.map((o) => (
+          <button key={o} type="button" className={`bot-option ${a[part] === o ? 'on' : ''}`} title={BOT_LABELS[o] || o} onClick={() => setPart(part, o)}>
+            {part === 'color' ? <span className="bot-swatch" style={{ background: BOT_COLORS[o] }} /> : <BotAvatar spec={{ ...a, [part]: o }} size={28} />}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+  return (
+    <div className="bot-builder">
+      <div className="bot-preview">
+        <BotAvatar spec={a} size={96} />
+        <button type="button" className="btn-ghost" onClick={() => onChange(avatarSpec(randomAvatar()))}><LuDices size={14} /> Aléatoire</button>
+      </div>
+      <div className="bot-parts">
+        <Row label="Couleur" part="color" options={Object.keys(BOT_COLORS)} />
+        <Row label="Yeux" part="eyes" options={BOT_EYES} />
+        <Row label="Bouche" part="mouth" options={BOT_MOUTHS} />
+        <Row label="Antenne" part="antenna" options={BOT_ANTENNAS} />
+        <Row label="Accessoire" part="accessory" options={BOT_ACCESSORIES} />
+      </div>
+    </div>
   );
 }
