@@ -414,7 +414,7 @@ function AgentTile({ agent, active, busy, unread, onClick, lead }) {
         {busy ? <span className="sb-agent-badge busy"><span /><span /><span /></span> : unread > 0 ? <span className="sb-agent-badge">{unread}</span> : null}
       </span>
       {lead ? (
-        <span className="sb-agent-lead-text"><span className="sb-agent-name">{agent.label}</span><span className="sb-agent-role">Cheffe d'équipe</span></span>
+        <span className="sb-agent-lead-text"><span className="sb-agent-name">{agent.label}</span><span className="sb-agent-role">Cheffe d’équipe</span></span>
       ) : <span className="sb-agent-name">{agent.label}</span>}
     </button>
   );

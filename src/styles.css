@@ -950,3 +950,7 @@ body.resizing { user-select: none; cursor: col-resize; }
 .sb-agent-tile.lead { background: rgba(234, 232, 230, 0.042); box-shadow: none; }
 .sb-agent-tile.lead:hover, .sb-agent-tile.lead.active { background: var(--fill-selected); }
 .sb-agent-role { color: var(--muted-foreground); }
+/* Homogeneous type in agent tiles: no heading style inside items, sizes from the sidebar scale */
+.sb-agent-role { font-size: 12px; font-weight: 400; letter-spacing: normal; text-transform: none; line-height: 16px; color: var(--muted-foreground); }
+.sb-agent-name { font-size: 12px; line-height: 16px; }
+.sb-agent-lead-text .sb-agent-name { font-size: 13px; line-height: 18px; }
