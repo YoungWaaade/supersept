@@ -16,6 +16,16 @@ import Empty from './components/Empty.jsx';
 import MobileApp from './components/MobileApp.jsx';
 import { isPhone } from './components/Terminal.jsx';
 
+// After a hub update the socket reconnects but the page keeps the old bundle: reload if stale.
+async function reloadIfOutdated() {
+  try {
+    const html = await (await fetch('/', { cache: 'no-store' })).text();
+    const served = /assets\/index-[\w-]+\.js/.exec(html)?.[0];
+    const mine = [...document.scripts].map((x) => x.src).find((src) => /assets\/index-[\w-]+\.js/.test(src));
+    if (served && mine && !mine.endsWith(served)) location.reload();
+  } catch {}
+}
+
 function parseHash() {
   const [, kind, id] = location.hash.split('/');
   return kind ? { kind, id } : { kind: 'board' };
@@ -49,7 +59,7 @@ export default function App() {
     let sock, timer, dead = false;
     const connect = () => {
       sock = new WebSocket(wsUrl('/ws/events'));
-      sock.onopen = () => { setConnected(true); load(); };
+      sock.onopen = () => { setConnected(true); load(); reloadIfOutdated(); };
       sock.onclose = () => { setConnected(false); if (!dead) timer = setTimeout(connect, 1500); };
       sock.onmessage = (e) => {
         const m = JSON.parse(e.data);
