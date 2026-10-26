@@ -760,8 +760,22 @@ app.post('/api/workspaces/:id/send', wrap(async (req, res) => {
   let s = sessions.get(`${ws.id}:agent`);
   const fresh = !s?.alive;
   if (fresh) s = startAgent(ws.id);
-  // A freshly (re)started Claude needs a moment before it accepts input.
-  setTimeout(() => s.write(text.replace(/\r?\n/g, ' ') + '\r'), fresh ? 6000 : 50);
+  // Paste the text (bracketed paste, so Claude Code treats it as one block), then press Enter
+  // separately: sent in the same burst, the Enter would be swallowed by the paste and never submit.
+  // A freshly (re)started Claude needs a few seconds before it accepts input.
+  // Claude Code refuses to send invisible characters (French non-breaking spaces before « : », zero-width
+  // chars…) and asks to "review and press Enter": normalise them, and confirm if it still asks.
+  const clean = text.replace(/\r?\n/g, ' ').replace(/[\u00a0\u202f\u2007\u2009\u200a]/g, ' ').replace(/[\u200b-\u200d\u2060\ufeff]/g, '');
+  setTimeout(() => {
+    s.write(`\x1b[200~${clean}\x1b[201~`);
+    setTimeout(() => {
+      const mark = s.buffer.length;
+      s.write('\r');
+      setTimeout(() => {
+        if (/press\s*Enter\s*to\s*send/i.test(s.buffer.slice(mark).replace(/\x1b\[[0-9;?<>]*[a-zA-Z]/g, ''))) s.write('\r');
+      }, 1200);
+    }, 400);
+  }, fresh ? 6000 : 50);
   logEvent(ws.id, 'prompt', text);
   res.json({ ok: true, demarree: fresh });
 }));
@@ -775,6 +789,13 @@ app.put('/api/agents/:slug', wrap(async (req, res) => {
     deleteAgent(req.params.slug);
     db.prepare('UPDATE workspaces SET agent = ? WHERE agent = ?').run(slug, req.params.slug);
     db.prepare('UPDATE agent_tabs SET agent = ? WHERE agent = ?').run(slug, req.params.slug);
+    // Keep its chat and the sessions it launched attached to the renamed agent.
+    db.prepare('UPDATE workspaces SET owner_agent = ? WHERE owner_agent = ?').run(slug, req.params.slug);
+    db.prepare('UPDATE agent_chats SET manager = ? WHERE manager = ?').run(slug, req.params.slug);
+    if (!db.prepare('SELECT 1 FROM agent_chats WHERE agent = ?').get(slug)) {
+      db.prepare('UPDATE agent_chats SET agent = ? WHERE agent = ?').run(slug, req.params.slug);
+      db.prepare('UPDATE chat_messages SET agent = ? WHERE agent = ?').run(slug, req.params.slug);
+    }
   }
   broadcast({ type: 'reload' });
   res.json(a);
