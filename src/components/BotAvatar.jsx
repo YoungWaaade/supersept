@@ -2,6 +2,7 @@
 // and the "ember" palette. Drawn on a 16×16 grid, rendered crisp at any size.
 
 export const BOT_COLORS = {
+  roux: '#d9602a',
   jaune: '#f2c230',
   ember: '#e07850',
   sable: '#e5c07b',
@@ -11,18 +12,20 @@ export const BOT_COLORS = {
   corail: '#dc6b6b',
   galet: '#a8a5a3',
 };
-// Yellow belongs to the team lead (Nami): not offered for other agents, nor picked at random.
-export const RESERVED_COLORS = ['jaune', 'sable'];
-export const PICKABLE_COLORS = Object.keys(BOT_COLORS).filter((c) => !RESERVED_COLORS.includes(c));
+// The team lead (Nami) has her own look: ginger colour, hair tuft and big blue bow. These parts are
+// not offered for other agents, nor picked at random.
+export const RESERVED = ['roux', 'meche', 'ruban'];
+export const PICKABLE_COLORS = Object.keys(BOT_COLORS).filter((c) => !RESERVED.includes(c));
 export const BOT_EYES = ['ronds', 'joyeux', 'pixels', 'endormis', 'etoiles'];
 export const BOT_MOUTHS = ['sourire', 'o', 'neutre', 'langue'];
-export const BOT_ANTENNAS = ['boule', 'double', 'eclair', 'aucune'];
-export const BOT_ACCESSORIES = ['aucun', 'palette', 'loupe', 'plume', 'casque', 'noeud', 'cle'];
+export const BOT_ANTENNAS = ['boule', 'double', 'eclair', 'aucune', 'meche'];
+export const BOT_ACCESSORIES = ['aucun', 'palette', 'loupe', 'plume', 'casque', 'noeud', 'cle', 'ruban'];
+export const pickable = (list) => list.filter((x) => !RESERVED.includes(x));
 export const BOT_LABELS = {
   ronds: 'Ronds', joyeux: 'Joyeux', pixels: 'Pixels', endormis: 'Endormis', etoiles: 'Étoiles',
   sourire: 'Sourire', o: 'Oh', neutre: 'Neutre', langue: 'Langue',
-  boule: 'Boule', double: 'Double', eclair: 'Éclair', aucune: 'Aucune',
-  aucun: 'Aucun', palette: 'Palette', loupe: 'Loupe', plume: 'Plume', casque: 'Casque', noeud: 'Nœud', cle: 'Clé',
+  boule: 'Boule', double: 'Double', eclair: 'Éclair', aucune: 'Aucune', meche: 'Mèche',
+  aucun: 'Aucun', palette: 'Palette', loupe: 'Loupe', plume: 'Plume', casque: 'Casque', noeud: 'Nœud', cle: 'Clé', ruban: 'Grand nœud',
 };
 
 const BG = '#151110';
@@ -42,19 +45,19 @@ export function parseAvatar(spec, seed = '') {
     color: Object.keys(BOT_COLORS).includes(parts[0]) ? parts[0] : pick(PICKABLE_COLORS, 0),
     eyes: pick(BOT_EYES, 1, parts[1]),
     mouth: pick(BOT_MOUTHS, 2, parts[2]),
-    antenna: pick(BOT_ANTENNAS, 3, parts[3]),
+    antenna: BOT_ANTENNAS.includes(parts[3]) ? parts[3] : pick(pickable(BOT_ANTENNAS), 3),
     accessory: parts[4] && BOT_ACCESSORIES.includes(parts[4]) ? parts[4] : 'aucun',
   };
 }
 export const avatarSpec = (a) => [a.color, a.eyes, a.mouth, a.antenna, a.accessory].join(',');
 export function randomAvatar() {
   const r = (l) => l[Math.floor(Math.random() * l.length)];
-  return { color: r(PICKABLE_COLORS), eyes: r(BOT_EYES), mouth: r(BOT_MOUTHS), antenna: r(BOT_ANTENNAS), accessory: r(BOT_ACCESSORIES) };
+  return { color: r(PICKABLE_COLORS), eyes: r(BOT_EYES), mouth: r(BOT_MOUTHS), antenna: r(pickable(BOT_ANTENNAS)), accessory: r(pickable(BOT_ACCESSORIES)) };
 }
 
 function draw(a) {
   const base = BOT_COLORS[a.color] || BOT_COLORS.ember;
-  const P = { D: mix(base, BG, 0.55), B: base, L: mix(base, '#ffffff', 0.38), S: '#2a1f1c', E: mix(base, '#ffffff', 0.72), F: mix(base, '#fff6ee', 0.82), W: '#ffffff', C: '#f4a0a0', K: '#eae8e6', G: '#5c5856' };
+  const P = { D: mix(base, BG, 0.55), B: base, L: mix(base, '#ffffff', 0.38), S: '#2a1f1c', E: mix(base, '#ffffff', 0.72), F: mix(base, '#fff6ee', 0.82), W: '#ffffff', C: '#f4a0a0', K: '#eae8e6', G: '#5c5856', H: mix(base, '#7a2a0c', 0.35), U: '#61afef', V: '#3a7fc4', Y: '#a9d6fa' };
   const px = new Map();
   const set = (x, y, c) => { if (x >= 0 && x < 16 && y >= 0 && y < 16) px.set(`${x},${y}`, c); };
   const rect = (x0, y0, x1, y1, c) => { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) set(x, y, c); };
@@ -64,6 +67,8 @@ function draw(a) {
   if (a.antenna === 'boule') { rect(7, 1, 8, 2, 'D'); rect(7, 0, 8, 0, 'L'); }
   if (a.antenna === 'double') { dots([[5, 2], [10, 2], [4, 1], [11, 1]], 'D'); dots([[4, 0], [11, 0]], 'L'); }
   if (a.antenna === 'eclair') { dots([[8, 0], [7, 1], [8, 1], [8, 2]], 'L'); dots([[7, 2]], 'D'); }
+  // Hair tuft: a little ginger curl falling over the top of the head.
+  if (a.antenna === 'meche') { dots([[6, 1], [7, 0], [8, 0], [9, 1], [7, 1], [8, 1], [5, 2], [6, 2], [7, 2]], 'H'); dots([[8, 1], [6, 2]], 'D'); }
 
   // Head: rounded box with outline, highlight and ears.
   rect(2, 3, 13, 12, 'D');
@@ -111,6 +116,12 @@ function draw(a) {
   if (a.accessory === 'plume') { dots([[15, 9], [14, 10], [15, 10], [13, 11], [14, 11], [12, 12], [13, 12]], 'K'); dots([[11, 13], [10, 14]], 'G'); }
   if (a.accessory === 'casque') { rect(3, 2, 12, 2, 'G'); dots([[2, 3], [13, 3]], 'G'); rect(0, 5, 1, 10, 'G'); rect(14, 5, 15, 10, 'G'); }
   if (a.accessory === 'noeud') { dots([[10, 2], [11, 1], [11, 2], [11, 3], [13, 1], [13, 2], [13, 3], [14, 2]], 'C'); set(12, 2, 'L'); }
+  // Big blue bow on the side of the head.
+  if (a.accessory === 'ruban') {
+    dots([[9, 1], [10, 1], [9, 2], [10, 2], [11, 2], [9, 3], [10, 3]], 'U');
+    dots([[13, 1], [14, 1], [12, 2], [13, 2], [14, 2], [13, 3], [14, 3]], 'U');
+    set(12, 2, 'V'); set(11, 2, 'V'); dots([[9, 1], [14, 1]], 'Y');
+  }
   if (a.accessory === 'cle') { rect(12, 11, 14, 13, 'sable'); set(13, 12, 'S'); rect(13, 14, 13, 15, 'sable'); set(14, 15, 'sable'); }
 
   return [...px].map(([k, c]) => { const [x, y] = k.split(',').map(Number); return { x, y, fill: P[c] || BOT_COLORS[c] || c }; });
