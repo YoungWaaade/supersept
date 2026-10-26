@@ -130,6 +130,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS chat_messages (
   meta TEXT,
   at INTEGER NOT NULL
 )`);
+// Agent that delegated the current mission (e.g. Nami): replies are forwarded to it.
+addColumn('agent_chats', 'manager', 'TEXT');
 // Extra agent tabs inside a workspace: each one is its own Claude conversation.
 db.exec(`CREATE TABLE IF NOT EXISTS agent_tabs (
   id TEXT PRIMARY KEY,

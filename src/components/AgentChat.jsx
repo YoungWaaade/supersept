@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { LuArrowUp, LuSquare, LuRotateCcw, LuSettings2, LuFolder, LuFolderPlus, LuPlay, LuLayers, LuEye, LuSend, LuArchive, LuBrain, LuSearch, LuGlobe, LuWrench, LuCheck, LuX, LuLoaderCircle, LuMegaphone } from 'react-icons/lu';
+import { LuArrowUp, LuSquare, LuRotateCcw, LuSettings2, LuFolder, LuFolderPlus, LuPlay, LuLayers, LuEye, LuSend, LuArchive, LuBrain, LuSearch, LuGlobe, LuWrench, LuCheck, LuX, LuLoaderCircle, LuMegaphone, LuUsers, LuBot } from 'react-icons/lu';
 import { api } from '../api.js';
 import { useChat, setViewing } from '../chatStore.js';
 import BotAvatar from './BotAvatar.jsx';
 
-const ICONS = { folder: LuFolder, 'folder-plus': LuFolderPlus, play: LuPlay, layers: LuLayers, eye: LuEye, send: LuSend, archive: LuArchive, brain: LuBrain, search: LuSearch, globe: LuGlobe, tool: LuWrench };
+const ICONS = { folder: LuFolder, 'folder-plus': LuFolderPlus, play: LuPlay, layers: LuLayers, eye: LuEye, send: LuSend, archive: LuArchive, brain: LuBrain, search: LuSearch, globe: LuGlobe, tool: LuWrench, users: LuUsers, bot: LuBot };
 const SUGGESTIONS = [
   'Qu\'est-ce que tu peux faire pour moi ?',
   'Fais le point sur mes sessions en cours',
@@ -41,6 +41,8 @@ function Markdown({ text }) {
 
 // "[Supersept] La session « X » (id …) vient de terminer. …" → "Session « X » terminée"
 function systemLabel(text) {
+  const reply = /^\[Supersept\] (.+?) a répondu/.exec(text || '');
+  if (reply) return `${reply[1]} a répondu`;
   const m = /La session « (.+?) » \(id [^)]+\) (vient de terminer|attend une réponse)/.exec(text || '');
   if (!m) return text;
   return m[2] === 'vient de terminer' ? `Session « ${m[1]} » terminée` : `Session « ${m[1]} » attend une réponse`;
@@ -119,7 +121,7 @@ export default function AgentChat({ agent, go }) {
               <button className="chat-send" title="Envoyer (↵)" disabled={!text.trim()} onClick={() => send()}><LuArrowUp size={14} /></button>
             )}
           </div>
-          <div className="chat-hint">Il travaille en arrière-plan dans tes projets et te prévient quand c'est fait.</div>
+          <div className="chat-hint">Le travail avance en arrière-plan dans tes projets, et tu es prévenu quand c'est fait.</div>
         </div>
       </div>
     </div>
@@ -127,13 +129,20 @@ export default function AgentChat({ agent, go }) {
 }
 
 function Message({ m, agent, go }) {
-  if (m.role === 'user') return <div className="msg user"><div className="msg-bubble">{m.text}</div></div>;
+  if (m.role === 'user') {
+    return (
+      <div className={`msg user ${m.meta?.from ? 'delegated' : ''}`}>
+        {m.meta?.from && <span className="msg-from">de {m.meta.fromLabel}</span>}
+        <div className="msg-bubble">{m.text}</div>
+      </div>
+    );
+  }
   if (m.role === 'system') return <div className="msg-system"><LuMegaphone size={12} /> {systemLabel(m.text)}</div>;
   if (m.role === 'error') return <div className="msg-system error"><LuX size={12} /> {m.text}</div>;
   if (m.role === 'activity') {
     const Icon = ICONS[m.meta?.icon] || LuWrench;
     const st = m.meta?.status;
-    const link = m.meta?.workspace ? () => go({ kind: 'ws', id: m.meta.workspace }) : null;
+    const link = m.meta?.workspace ? () => go({ kind: 'ws', id: m.meta.workspace }) : m.meta?.agent ? () => go({ kind: 'agent', id: m.meta.agent }) : null;
     return (
       <div className={`msg-activity ${st} ${link ? 'link' : ''}`} onClick={link || undefined} title={link ? 'Ouvrir la session' : undefined}>
         <Icon size={12} /> <span>{m.text}</span>

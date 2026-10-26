@@ -11,6 +11,9 @@ const HELP = `supersept — piloter Supersept
   supersept session ID
   supersept send ID "message"
   supersept archive ID
+  supersept agents
+  supersept ask-agent AGENT_ID "mission"
+  supersept create-agent --name "Nom" --description "quand l'utiliser" --prompt "instructions" [--model sonnet]
   supersept memory PROJECT_ID
   supersept set-memory PROJECT_ID --content "texte"   (ou le texte sur l'entrée standard)
 
@@ -44,6 +47,9 @@ const run = {
   send: () => ops.sendToSession(pos[0], pos.slice(1).join(' ') || flags.message),
   archive: () => ops.archiveSession(pos[0]),
   memory: () => ops.readMemory(pos[0]),
+  agents: () => ops.listAgents(),
+  'ask-agent': () => ops.askAgent(pos[0], pos.slice(1).join(' ') || flags.mission),
+  'create-agent': () => ops.createAgent({ name: flags.name, description: flags.description, prompt: flags.prompt, model: flags.model, avatar: flags.avatar }),
   'set-memory': async () => ops.writeMemory(pos[0], flags.content ?? await stdin()),
 };
 

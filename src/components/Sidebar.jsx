@@ -212,7 +212,10 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
             </SectionHeader>
             {!closedSections.agents && (
               <div className="sb-agents">
-                {(data.agents || []).map((a) => (
+                {(data.agents || []).filter((a) => a.manager).map((a) => (
+                  <AgentTile key={a.slug} lead agent={a} active={route.kind === 'agent' && route.id === a.slug} busy={badges.busy(a.slug)} unread={badges.unread(a.slug)} onClick={() => go({ kind: 'agent', id: a.slug })} />
+                ))}
+                {(data.agents || []).filter((a) => !a.manager).map((a) => (
                   <AgentTile key={a.slug} agent={a} active={route.kind === 'agent' && route.id === a.slug} busy={badges.busy(a.slug)} unread={badges.unread(a.slug)} onClick={() => go({ kind: 'agent', id: a.slug })} />
                 ))}
               </div>
@@ -403,14 +406,16 @@ function ResizeHandle({ width, setWidth }) {
 }
 
 // Agents as tiles: a big pixel bot with its name underneath.
-function AgentTile({ agent, active, busy, unread, onClick }) {
+function AgentTile({ agent, active, busy, unread, onClick, lead }) {
   return (
-    <button className={`sb-agent-tile ${active ? 'active' : ''}`} onClick={onClick} title={agent.description}>
+    <button className={`sb-agent-tile ${active ? 'active' : ''} ${lead ? 'lead' : ''}`} onClick={onClick} title={agent.description}>
       <span className="sb-agent-bot">
         <BotAvatar spec={agent.avatar} seed={agent.slug} size={40} />
         {busy ? <span className="sb-agent-badge busy"><span /><span /><span /></span> : unread > 0 ? <span className="sb-agent-badge">{unread}</span> : null}
       </span>
-      <span className="sb-agent-name">{agent.label}</span>
+      {lead ? (
+        <span className="sb-agent-lead-text"><span className="sb-agent-name">{agent.label}</span><span className="sb-agent-role">Cheffe d'équipe</span></span>
+      ) : <span className="sb-agent-name">{agent.label}</span>}
     </button>
   );
 }

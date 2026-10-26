@@ -744,7 +744,8 @@ app.get('/api/agents/:slug/chat', (req, res) => res.json({ messages: chatHistory
 app.post('/api/agents/:slug/chat', wrap(async (req, res) => {
   const text = String(req.body.text || '').trim();
   if (!text) throw new Error('message vide');
-  sendToAgent(req.params.slug, text);
+  const from = req.get('X-Supersept-Agent') || null;
+  sendToAgent(req.params.slug, text, { from: from && getAgent(from) ? from : null });
   res.json({ ok: true });
 }));
 app.post('/api/agents/:slug/chat/stop', (req, res) => { stopTurn(req.params.slug); res.json({ ok: true }); });

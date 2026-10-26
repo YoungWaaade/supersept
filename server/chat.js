@@ -7,7 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { db, HUB_DIR } from './db.js';
-import { getAgent } from './agents.js';
+import { getAgent, listAgents } from './agents.js';
 
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cli.mjs');
 const running = new Map(); // agent → child process
@@ -80,10 +80,28 @@ function systemPrompt(a) {
     "- Ne fais jamais de boucle d'attente. Tu recevras automatiquement un message « [Supersept] » quand une de tes sessions se termine ou attend une réponse. Alors regarde-la (supersept session ID) et fais un point d'une phrase.",
     "- Si une session te pose une question que tu peux trancher sans risque, réponds-lui toi-même (supersept send). Demande à l'utilisateur seulement pour les décisions importantes : supprimer, publier, payer, envoyer quelque chose à l'extérieur.",
     '',
+    ...(a.manager ? managerSection(a) : [
+      "- Si un message vient d'un autre agent qui coordonne l'équipe (par exemple Nami), traite sa demande comme celle de l'utilisateur et réponds-lui aussi court ; ta réponse lui est transmise automatiquement.",
+    ]),
+    '',
     `Ton rôle : ${a.description || ''}`,
     '',
     a.prompt || '',
   ].join('\n');
+}
+
+function managerSection(a) {
+  const team = listAgents().filter((x) => x.slug !== a.slug);
+  return [
+    '',
+    "Tu coordonnes l'équipe d'agents de l'utilisateur :",
+    ...(team.length ? team.map((x) => `    - ${x.label} (identifiant ${x.slug}) : ${x.description || 'pas de description'}`) : ["    (aucun autre agent pour l'instant)"]),
+    "- Pour chaque mission, choisis l'agent le plus adapté et confie-la-lui : supersept ask-agent IDENTIFIANT \"mission complète\". Sa réponse te revient automatiquement dans un message « [Supersept] … a répondu ». Fais alors une synthèse d'une ou deux phrases à l'utilisateur.",
+    "- Tu peux confier plusieurs missions en parallèle à des agents différents.",
+    '- Si aucun agent ne convient, lance toi-même une session (supersept start-session).',
+    "- Si un besoin revient souvent et qu'aucun agent ne le couvre, propose à l'utilisateur de créer un agent ; crée-le seulement après son accord : supersept create-agent --name \"Nom\" --description \"quand l'utiliser\" --prompt \"instructions\".",
+    "- supersept agents liste l'équipe à jour.",
+  ];
 }
 
 // Each agent gets a home folder with a `supersept` launcher on its PATH.
@@ -114,6 +132,13 @@ function describeTool(name, input = {}) {
       case 'archive': return { icon: 'archive', label: 'Archive une session' };
       case 'memory': return { icon: 'brain', label: 'Lit la mémoire du projet' };
       case 'set-memory': return { icon: 'brain', label: 'Met à jour la mémoire du projet' };
+      case 'agents': return { icon: 'users', label: "Regarde l'équipe" };
+      case 'ask-agent': {
+        const who = (/ask-agent\s+([\w-]+)/.exec(cmd) || [])[1];
+        const label = listAgents().find((x) => x.slug === who)?.label || who;
+        return { icon: 'send', label: `Confie une mission à ${label}`, agent: who };
+      }
+      case 'create-agent': return { icon: 'bot', label: `Crée l'agent${q(flag(cmd, 'name'))}` };
       default: return { icon: 'tool', label: 'Commande Supersept' };
     }
   }
@@ -125,10 +150,17 @@ function describeTool(name, input = {}) {
   }
 }
 
-export function sendToAgent(agent, text, { internal = false } = {}) {
+// from: slug of the agent delegating this message (a manager like Nami); its replies go back to it.
+export function sendToAgent(agent, text, { internal = false, from = null } = {}) {
   const a = getAgent(agent);
   if (!a) throw new Error('agent introuvable');
-  addMessage(agent, internal ? 'system' : 'user', text);
+  if (from && from === agent) throw new Error('un agent ne peut pas se déléguer une mission à lui-même');
+  const sender = from ? getAgent(from) : null;
+  chatState(agent);
+  // Talking directly to an agent takes it back from its manager; a delegation hands it over.
+  if (!internal) db.prepare('UPDATE agent_chats SET manager = ? WHERE agent = ?').run(sender ? sender.slug : null, agent);
+  addMessage(agent, internal ? 'system' : 'user', text, sender ? { from: sender.slug, fromLabel: sender.label } : null);
+  if (sender) text = `[Message de ${sender.label}, qui coordonne l'équipe] ${text}`;
   const q = queues.get(agent) || [];
   q.push(text);
   queues.set(agent, q);
@@ -204,6 +236,11 @@ function runNext(agent) {
   child.stderr.on('data', (d) => { errText += d; });
   child.on('close', (code) => {
     running.delete(agent);
+    // A delegated agent reports each answer back to its manager, who sums it up for the user.
+    const manager = db.prepare('SELECT manager FROM agent_chats WHERE agent = ?').get(agent)?.manager;
+    if (reply && manager && manager !== agent && getAgent(manager)) {
+      try { sendToAgent(manager, `[Supersept] ${a.label} a répondu : ${reply.text.slice(0, 2000)}`, { internal: true }); } catch {}
+    }
     for (const m of tools.values()) if (m.meta.status === 'running') updateMessage(m, { meta: { ...m.meta, status: code ? 'error' : 'done' } });
     if (code && !reply && code !== 143 && code !== null) addMessage(agent, 'error', `Je n'ai pas pu répondre (${String(errText).trim().split('\n').pop()?.slice(0, 200) || `code ${code}`}).`);
     ctx.broadcast({ type: 'chat-busy', agent, busy: false });

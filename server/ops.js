@@ -67,3 +67,17 @@ export const sendToSession = (id, message) => call('POST', `/api/workspaces/${id
 export async function archiveSession(id) { await call('PATCH', `/api/workspaces/${id}`, { archived: true }); return { id, statut: 'archivée' }; }
 export const readMemory = async (project) => (await call('GET', `/api/projects/${project}/memory`)).content;
 export async function writeMemory(project, content) { await call('PUT', `/api/projects/${project}/memory`, { content }); return { projet: project, statut: 'mémoire mise à jour' }; }
+
+export async function listAgents() {
+  const list = await call('GET', '/api/agents');
+  return list.map((a) => ({ id: a.slug, nom: a.label, role: a.description, coordinatrice: !!a.manager }));
+}
+export async function askAgent(slug, mission) {
+  if (!slug || !mission) throw new Error("il faut l'identifiant de l'agent et la mission");
+  await call('POST', `/api/agents/${slug}/chat`, { text: mission });
+  return { agent: slug, statut: 'mission confiée — sa réponse te sera transmise automatiquement' };
+}
+export async function createAgent({ name, description, prompt, model, avatar }) {
+  const a = await call('PUT', '/api/agents/new', { label: name, slug: name, description, prompt, model, avatar });
+  return { id: a.slug, nom: a.label, statut: 'agent créé' };
+}
