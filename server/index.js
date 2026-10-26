@@ -11,7 +11,8 @@ import { db, HUB_DIR, HOOKS_DIR, WORKTREES_DIR, MEMORY_DIR, memoryFile } from '.
 import * as git from './git.js';
 import { listSessions, lastAssistantText } from './history.js';
 import { listAgents, getAgent, saveAgent, deleteAgent, isSlug, slugify } from './agents.js';
-import { sessions, spawn, spawnShell, killWorkspace, which, homedir } from './pty.js';
+import { sessions, spawn, spawnShell, killWorkspace, which, homedir, childEnv } from './pty.js';
+import { initChat, sendToAgent, chatHistory, isBusy, resetChat, stopTurn } from './chat.js';
 import * as remote from './remote.js';
 
 const PORT = Number(process.env.PORT || 4317);
@@ -185,8 +186,41 @@ function startAgent(wsId) {
       refreshStats(ws.id);
     },
   });
+  if (ws.owner_agent) watchTrustPrompt(s, ws, project);
   settle(ws.id);
   return s;
+}
+
+// Folders the user already trusted in Claude Code (read-only look at ~/.claude.json).
+function trustedByUser(dir) {
+  try {
+    const projects = JSON.parse(fs.readFileSync(path.join(homedir, '.claude.json'), 'utf8')).projects || {};
+    return !!projects[real(dir)]?.hasTrustDialogAccepted || !!projects[dir]?.hasTrustDialogAccepted;
+  } catch {
+    return false;
+  }
+}
+
+// Agent-launched sessions run unattended: a "trust this folder?" screen would block them silently.
+// Accept it only for a fresh worktree/folder of a project the user already trusted; otherwise
+// flag the session as waiting so the agent tells the user.
+function watchTrustPrompt(s, ws, project) {
+  let seen = '';
+  const sub = s.proc.onData((d) => {
+    seen = (seen + d).slice(-4000).replace(/\x1b\[[0-9;?<>]*[a-zA-Z]/g, '');
+    if (!/trust\s*this\s*folder/i.test(seen)) return;
+    sub.dispose();
+    if (project && trustedByUser(project.path)) {
+      setTimeout(() => { s.write('\x1b[B'); setTimeout(() => s.write('\r'), 150); }, 300);
+      logEvent(ws.id, 'trust', `Dossier accepté automatiquement (projet « ${project.name} » déjà approuvé)`);
+    } else {
+      const msg = `Claude demande si tu fais confiance au dossier ${ws.cwd.replace(homedir, '~')} : ouvre la session et choisis « Yes, I trust this folder ».`;
+      logEvent(ws.id, 'waiting', msg);
+      setStatus(ws.id, 'waiting', msg);
+      reportToOwner(ws.id, 'attend une réponse', msg);
+    }
+  });
+  setTimeout(() => sub.dispose(), 60000);
 }
 
 // Project "run" command (dev server, etc.) in its own PTY, like Superset's Run button.
@@ -582,6 +616,9 @@ app.post('/api/workspaces', wrap(async (req, res) => {
   const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
   const MODES = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'plan'];
   if (req.body.agent && getAgent(req.body.agent)) db.prepare('UPDATE workspaces SET agent = ? WHERE id = ?').run(req.body.agent, id);
+  // Sessions launched by a chat agent report back to it when they finish.
+  const owner = req.body.ownerAgent || req.get('X-Supersept-Agent');
+  if (owner && getAgent(owner)) db.prepare('UPDATE workspaces SET owner_agent = ? WHERE id = ?').run(owner, id);
   db.prepare('UPDATE workspaces SET model = ?, effort = ?, permission_mode = ? WHERE id = ?').run(
     MODELS.includes(req.body.model) ? req.body.model : null,
     EFFORTS.includes(req.body.effort) ? req.body.effort : null,
@@ -703,6 +740,31 @@ app.get('/api/workspaces/:id/file', wrap(async (req, res) => {
 
 app.get('/api/agents', (req, res) => res.json(listAgents()));
 
+app.get('/api/agents/:slug/chat', (req, res) => res.json({ messages: chatHistory(req.params.slug), busy: isBusy(req.params.slug) }));
+app.post('/api/agents/:slug/chat', wrap(async (req, res) => {
+  const text = String(req.body.text || '').trim();
+  if (!text) throw new Error('message vide');
+  sendToAgent(req.params.slug, text);
+  res.json({ ok: true });
+}));
+app.post('/api/agents/:slug/chat/stop', (req, res) => { stopTurn(req.params.slug); res.json({ ok: true }); });
+app.post('/api/agents/:slug/chat/reset', (req, res) => { resetChat(req.params.slug); res.json({ ok: true }); });
+
+// Type a message into a session's Claude (used by chat agents to answer or follow up).
+app.post('/api/workspaces/:id/send', wrap(async (req, res) => {
+  const ws = getWorkspace(req.params.id);
+  if (!ws) throw new Error('session introuvable');
+  const text = String(req.body.text || '').trim();
+  if (!text) throw new Error('message vide');
+  let s = sessions.get(`${ws.id}:agent`);
+  const fresh = !s?.alive;
+  if (fresh) s = startAgent(ws.id);
+  // A freshly (re)started Claude needs a moment before it accepts input.
+  setTimeout(() => s.write(text.replace(/\r?\n/g, ' ') + '\r'), fresh ? 6000 : 50);
+  logEvent(ws.id, 'prompt', text);
+  res.json({ ok: true, demarree: fresh });
+}));
+
 app.put('/api/agents/:slug', wrap(async (req, res) => {
   const slug = req.body.slug ? slugify(req.body.slug) : req.params.slug;
   if (!isSlug(req.params.slug) && req.params.slug !== 'new') throw new Error('agent invalide');
@@ -785,6 +847,14 @@ app.post('/api/workspaces/:id/open', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Tell the chat agent that launched a session what happened, so it can follow up on its own.
+function reportToOwner(wsId, what, text) {
+  const ws = getWorkspace(wsId);
+  if (!ws?.owner_agent || !getAgent(ws.owner_agent)) return;
+  const msg = `[Supersept] La session « ${ws.name} » (id ${ws.id}) ${what}.${text ? ` Son dernier message : ${String(text).slice(0, 1500)}` : ''}`;
+  try { sendToAgent(ws.owner_agent, msg, { internal: true }); } catch {}
+}
+
 // Claude Code hooks (called by curl from inside the agent, no Origin header).
 app.post('/api/hook/:id/:event', (req, res) => {
   res.json({});
@@ -810,6 +880,7 @@ app.post('/api/hook/:id/:event', (req, res) => {
       if (/idle|waiting for your input/i.test(msg) && ws.status === 'review') break;
       logEvent(id, 'waiting', msg);
       setStatus(id, 'waiting', msg);
+      reportToOwner(id, 'attend une réponse', msg);
       break;
     }
     case 'Stop': {
@@ -817,6 +888,7 @@ app.post('/api/hook/:id/:event', (req, res) => {
       logEvent(id, 'stop', text?.slice(0, 4000));
       setStatus(id, 'review', text?.slice(0, 600) ?? null);
       refreshStats(id);
+      reportToOwner(id, 'vient de terminer', text);
       break;
     }
     case 'SessionStart':
@@ -902,6 +974,8 @@ setInterval(() => {
 // On boot nothing is running anymore: reset stale "working" states.
 db.prepare("UPDATE workspaces SET status = 'idle' WHERE status IN ('working', 'waiting')").run();
 for (const { id } of db.prepare('SELECT id FROM workspaces WHERE archived = 0').all()) refreshStats(id);
+
+initChat({ claude: CLAUDE, port: PORT, userName: fullName || os.userInfo().username, broadcast, env: () => childEnv({}) });
 
 server.listen(PORT, remote.listenHost(), () => {
   console.log(`Supersept → http://localhost:${PORT}${remote.enabled() ? ' (accès téléphone activé)' : ''}`);

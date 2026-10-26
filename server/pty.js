@@ -21,7 +21,7 @@ export function which(bin) {
   }
 }
 
-function childEnv(extra) {
+export function childEnv(extra) {
   const env = { ...process.env, PATH: loginPath, TERM: 'xterm-256color', COLORTERM: 'truecolor', ...extra };
   // Don't let agents think they are nested inside the Claude Code that may have started the hub.
   for (const k of Object.keys(env)) if (k === 'CLAUDECODE' || k.startsWith('CLAUDE_CODE_')) delete env[k];

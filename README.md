@@ -51,11 +51,13 @@ Supersept tourne tant que le terminal reste ouvert.
 
 ### Agents
 
-Page **Agents** (sidebar, ou l'engrenage de la barre d'agents) : crée des agents Claude avec leur propre rôle, instructions, modèle, effort, permissions, outils autorisés et premier message.
+Section **AGENTS** de la sidebar : chaque agent est un petit robot avec qui tu discutes en chat. Donne-lui une mission, il répond en une ou deux phrases et fait le travail en arrière-plan :
 
-- Ils apparaissent dans la barre à côté de « Claude » : un clic ouvre un onglet avec cet agent dans l'espace en cours (sa propre conversation, reprise après un redémarrage).
-- Dans « Nouvel espace de travail », le sélecteur « Claude ▾ » permet de lancer tout l'espace avec un agent.
-- Ils sont enregistrés au format natif de Claude Code (`~/.claude/agents/<nom>.md`) : ils marchent aussi dans un terminal (`claude --agent <nom>`) et Claude peut les appeler en renfort pendant une session.
+- il crée des projets (vides, depuis un dossier ou un repo GitHub) et lance des sessions Claude Code avec une mission précise ;
+- il suit ces sessions : quand l'une se termine ou attend une réponse, il est prévenu automatiquement et te fait un point ;
+- il ne modifie jamais de fichiers lui-même : il agit uniquement via la commande `supersept` (`server/cli.mjs`), et les sessions qu'il lance restent visibles dans tes projets.
+
+Le **+** de la section crée un agent (rôle, instructions, modèle, robot). Les agents sont enregistrés au format natif de Claude Code (`~/.claude/agents/<nom>.md`).
 
 Raccourcis : ⌘N nouvel espace · ⌘K rechercher · ⌘T terminal · ⌘D diviser · ⌘⌥1…9 aller à l'espace n · ⇧↵ nouvelle ligne dans Claude.
 

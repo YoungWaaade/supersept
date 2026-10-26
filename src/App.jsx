@@ -5,6 +5,8 @@ import WorkspaceView from './components/WorkspaceView.jsx';
 import Board from './components/Board.jsx';
 import ProjectMenu from './components/ProjectMenu.jsx';
 import AgentsPage from './components/AgentsPage.jsx';
+import AgentChat from './components/AgentChat.jsx';
+import { onChatEvent } from './chatStore.js';
 import { MemoryPage, HistoryPage, SettingsPage } from './components/Pages.jsx';
 import NewWorkspacePage from './components/NewWorkspacePage.jsx';
 import AddProject from './components/AddProject.jsx';
@@ -52,6 +54,7 @@ export default function App() {
       sock.onmessage = (e) => {
         const m = JSON.parse(e.data);
         if (m.type === 'reload') load();
+        if (m.type === 'chat' || m.type === 'chat-busy' || m.type === 'chat-reset') onChatEvent(m);
         if (m.type === 'workspace') {
           setData((d) => {
             const prev = d.workspaces.find((w) => w.id === m.workspace.id);
@@ -111,6 +114,8 @@ export default function App() {
   } else if (route.kind === 'new') {
     main = <NewWorkspacePage key={route.id || 'new'} projects={data.projects} agents={data.agents || []} initialProjectId={route.id} go={go}
       onAddProject={() => setModal({ type: 'add-project' })} onCreated={(w) => load().then(() => go({ kind: 'ws', id: w.id }))} />;
+  } else if (route.kind === 'agent' && (data.agents || []).some((a) => a.slug === route.id)) {
+    main = <AgentChat key={route.id} agent={data.agents.find((a) => a.slug === route.id)} go={go} />;
   } else if (route.kind === 'agents') {
     main = <AgentsPage key={route.id || 'agents'} agents={data.agents || []} initial={route.id} />;
   } else if (route.kind === 'memory') main = <MemoryPage key={route.id || 'memory'} projects={data.projects} initial={route.id} />;

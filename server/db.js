@@ -114,6 +114,22 @@ addColumn('workspaces', 'permission_mode', 'TEXT');
 addColumn('projects', 'run_command', 'TEXT');
 addColumn('workspaces', 'autostart', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('workspaces', 'agent', 'TEXT');
+addColumn('workspaces', 'owner_agent', 'TEXT');
+// Chat agents: one ongoing Claude conversation per agent, and the messages shown in the chat.
+db.exec(`CREATE TABLE IF NOT EXISTS agent_chats (
+  agent TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  started INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+)`);
+db.exec(`CREATE TABLE IF NOT EXISTS chat_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent TEXT NOT NULL,
+  role TEXT NOT NULL,
+  text TEXT,
+  meta TEXT,
+  at INTEGER NOT NULL
+)`);
 // Extra agent tabs inside a workspace: each one is its own Claude conversation.
 db.exec(`CREATE TABLE IF NOT EXISTS agent_tabs (
   id TEXT PRIMARY KEY,

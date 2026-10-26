@@ -175,11 +175,6 @@ export default function WorkspaceView({ ws, project, agents, go, onFork, rightOp
               <img src={claudeLogo} alt="" className="preset-icon" />
               <span>Claude</span>
             </button>
-            {agents.map((a) => (
-              <button key={a.slug} className="preset" title={`${a.description || a.label} — ouvre un onglet avec cet agent`} onClick={() => openAgentTab(a.slug)}>
-                <AgentIcon agent={a} /> <span>{a.label}</span>
-              </button>
-            ))}
           </div>
 
           <div className="tab-panels">

@@ -4,6 +4,8 @@ import { HiChevronRight, HiMiniPlus, HiMiniXMark, HiOutlineCog6Tooth } from 'rea
 import { VscNewFolder, VscFolderOpened, VscListFilter, VscGithubAlt } from 'react-icons/vsc';
 import { WorkspaceIcon, ProjectThumbnail, DiffStats } from './ui.jsx';
 import { api } from '../api.js';
+import { useChatBadges } from '../chatStore.js';
+import BotAvatar from './BotAvatar.jsx';
 
 const DND_TYPE = 'application/x-supersept-workspace';
 const DND_PROJECT = 'application/x-supersept-project';
@@ -17,7 +19,6 @@ const NAV = [
   { kind: 'search', label: 'Rechercher', Icon: LuSearch, kbd: '⌘K' },
   { kind: 'board', label: 'Espaces de travail', Icon: LuLayers },
   { kind: 'memory', label: 'Mémoire', Icon: LuBrain },
-  { kind: 'agents', label: 'Agents', Icon: LuBot },
   { kind: 'history', label: 'Historique', Icon: LuHistory },
 ];
 
@@ -47,6 +48,7 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
   useEffect(() => localStorage.setItem('sb-closed-sections', JSON.stringify(closedSections)), [closedSections]);
   useEffect(() => localStorage.setItem('sb-sort', JSON.stringify(sort)), [sort]);
 
+  const badges = useChatBadges();
   const visible = data.workspaces.filter((w) => !w.archived);
   const q = filter.trim().toLowerCase();
   const matches = (w) => !q || w.name.toLowerCase().includes(q) || (w.branch || '').toLowerCase().includes(q);
@@ -204,6 +206,14 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
         </div>
 
         <div className="sb-scroll">
+          <div className="sb-section">
+            <SectionHeader label="Agents" closed={closedSections.agents} onToggle={() => setClosedSections({ ...closedSections, agents: !closedSections.agents })}>
+              <button className="sb-iconbtn size-6" title="Nouvel agent" onClick={() => go({ kind: 'agents', id: 'new' })}><LuPlus size={14} /></button>
+            </SectionHeader>
+            {!closedSections.agents && (data.agents || []).map((a) => (
+              <AgentRow key={a.slug} agent={a} active={route.kind === 'agent' && route.id === a.slug} busy={badges.busy(a.slug)} unread={badges.unread(a.slug)} onClick={() => go({ kind: 'agent', id: a.slug })} />
+            ))}
+          </div>
           <div className={`sb-section ${dropTarget === '__sessions__' ? 'drop' : ''}`} {...dropProps('__sessions__')}>
             <SectionHeader label="Sessions" closed={closedSections.sessions} onToggle={() => setClosedSections({ ...closedSections, sessions: !closedSections.sessions })}>
               <button className="sb-iconbtn size-6" title="Nouvelle session" onClick={onNewSession}><LuPlus size={14} /></button>
@@ -386,4 +396,20 @@ function ResizeHandle({ width, setWidth }) {
     addEventListener('mouseup', up);
   };
   return <div className={`sb-resize ${dragging ? 'dragging' : ''}`} onMouseDown={start} onDoubleClick={() => setWidth(DEFAULT_WIDTH)} />;
+}
+
+function AgentRow({ agent, active, busy, unread, onClick }) {
+  return (
+    <div className={`sb-ws sb-agent ${active ? 'active' : ''}`}>
+      <div className="sb-ws-inner" role="button" onClick={onClick} title={agent.description}>
+        <span className="sb-ws-icon"><BotAvatar spec={agent.avatar} seed={agent.slug} size={18} /></span>
+        <div className="sb-ws-grid">
+          <span className="sb-ws-name fade-r">{agent.label}</span>
+          <span className="sb-ws-right">
+            {busy ? <span className="sb-agent-busy" title="Travaille…"><span /><span /><span /></span> : unread > 0 ? <span className="sb-agent-unread">{unread}</span> : null}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
 }
