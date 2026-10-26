@@ -2,6 +2,7 @@
 // and the "ember" palette. Drawn on a 16×16 grid, rendered crisp at any size.
 
 export const BOT_COLORS = {
+  jaune: '#f2c230',
   ember: '#e07850',
   sable: '#e5c07b',
   sauge: '#7ec699',
@@ -10,6 +11,9 @@ export const BOT_COLORS = {
   corail: '#dc6b6b',
   galet: '#a8a5a3',
 };
+// Yellow belongs to the team lead (Nami): not offered for other agents, nor picked at random.
+export const RESERVED_COLORS = ['jaune', 'sable'];
+export const PICKABLE_COLORS = Object.keys(BOT_COLORS).filter((c) => !RESERVED_COLORS.includes(c));
 export const BOT_EYES = ['ronds', 'joyeux', 'pixels', 'endormis', 'etoiles'];
 export const BOT_MOUTHS = ['sourire', 'o', 'neutre', 'langue'];
 export const BOT_ANTENNAS = ['boule', 'double', 'eclair', 'aucune'];
@@ -35,7 +39,7 @@ export function parseAvatar(spec, seed = '') {
   const h = hash(seed || spec || 'bot');
   const pick = (list, i, val) => (list.includes(val) ? val : list[(h >> (i * 3)) % list.length]);
   return {
-    color: pick(Object.keys(BOT_COLORS), 0, parts[0]),
+    color: Object.keys(BOT_COLORS).includes(parts[0]) ? parts[0] : pick(PICKABLE_COLORS, 0),
     eyes: pick(BOT_EYES, 1, parts[1]),
     mouth: pick(BOT_MOUTHS, 2, parts[2]),
     antenna: pick(BOT_ANTENNAS, 3, parts[3]),
@@ -45,7 +49,7 @@ export function parseAvatar(spec, seed = '') {
 export const avatarSpec = (a) => [a.color, a.eyes, a.mouth, a.antenna, a.accessory].join(',');
 export function randomAvatar() {
   const r = (l) => l[Math.floor(Math.random() * l.length)];
-  return { color: r(Object.keys(BOT_COLORS)), eyes: r(BOT_EYES), mouth: r(BOT_MOUTHS), antenna: r(BOT_ANTENNAS), accessory: r(BOT_ACCESSORIES) };
+  return { color: r(PICKABLE_COLORS), eyes: r(BOT_EYES), mouth: r(BOT_MOUTHS), antenna: r(BOT_ANTENNAS), accessory: r(BOT_ACCESSORIES) };
 }
 
 function draw(a) {

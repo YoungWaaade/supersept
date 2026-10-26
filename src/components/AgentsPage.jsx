@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { LuPlus, LuTrash2, LuDices } from 'react-icons/lu';
-import BotAvatar, { parseAvatar, avatarSpec, randomAvatar, BOT_COLORS, BOT_EYES, BOT_MOUTHS, BOT_ANTENNAS, BOT_ACCESSORIES, BOT_LABELS } from './BotAvatar.jsx';
+import BotAvatar, { parseAvatar, avatarSpec, randomAvatar, BOT_COLORS, PICKABLE_COLORS, BOT_EYES, BOT_MOUTHS, BOT_ANTENNAS, BOT_ACCESSORIES, BOT_LABELS } from './BotAvatar.jsx';
 import { api } from '../api.js';
 import { PageHeader } from './Pages.jsx';
 
@@ -124,7 +124,7 @@ function BotBuilder({ spec, seed, onChange }) {
         <button type="button" className="btn-ghost" onClick={() => onChange(avatarSpec(randomAvatar()))}><LuDices size={14} /> Aléatoire</button>
       </div>
       <div className="bot-parts">
-        <Row label="Couleur" part="color" options={Object.keys(BOT_COLORS)} />
+        <Row label="Couleur" part="color" options={a.color && !PICKABLE_COLORS.includes(a.color) ? [a.color, ...PICKABLE_COLORS] : PICKABLE_COLORS} />
         <Row label="Yeux" part="eyes" options={BOT_EYES} />
         <Row label="Bouche" part="mouth" options={BOT_MOUTHS} />
         <Row label="Antenne" part="antenna" options={BOT_ANTENNAS} />
