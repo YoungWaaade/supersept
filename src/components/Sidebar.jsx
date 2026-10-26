@@ -210,9 +210,13 @@ export default function Sidebar({ data, route, go, connected, me, onNew, onNewSe
             <SectionHeader label="Agents" closed={closedSections.agents} onToggle={() => setClosedSections({ ...closedSections, agents: !closedSections.agents })}>
               <button className="sb-iconbtn size-6" title="Nouvel agent" onClick={() => go({ kind: 'agents', id: 'new' })}><LuPlus size={14} /></button>
             </SectionHeader>
-            {!closedSections.agents && (data.agents || []).map((a) => (
-              <AgentRow key={a.slug} agent={a} active={route.kind === 'agent' && route.id === a.slug} busy={badges.busy(a.slug)} unread={badges.unread(a.slug)} onClick={() => go({ kind: 'agent', id: a.slug })} />
-            ))}
+            {!closedSections.agents && (
+              <div className="sb-agents">
+                {(data.agents || []).map((a) => (
+                  <AgentTile key={a.slug} agent={a} active={route.kind === 'agent' && route.id === a.slug} busy={badges.busy(a.slug)} unread={badges.unread(a.slug)} onClick={() => go({ kind: 'agent', id: a.slug })} />
+                ))}
+              </div>
+            )}
           </div>
           <div className={`sb-section ${dropTarget === '__sessions__' ? 'drop' : ''}`} {...dropProps('__sessions__')}>
             <SectionHeader label="Sessions" closed={closedSections.sessions} onToggle={() => setClosedSections({ ...closedSections, sessions: !closedSections.sessions })}>
@@ -398,18 +402,15 @@ function ResizeHandle({ width, setWidth }) {
   return <div className={`sb-resize ${dragging ? 'dragging' : ''}`} onMouseDown={start} onDoubleClick={() => setWidth(DEFAULT_WIDTH)} />;
 }
 
-function AgentRow({ agent, active, busy, unread, onClick }) {
+// Agents as tiles: a big pixel bot with its name underneath.
+function AgentTile({ agent, active, busy, unread, onClick }) {
   return (
-    <div className={`sb-ws sb-agent ${active ? 'active' : ''}`}>
-      <div className="sb-ws-inner" role="button" onClick={onClick} title={agent.description}>
-        <span className="sb-ws-icon"><BotAvatar spec={agent.avatar} seed={agent.slug} size={18} /></span>
-        <div className="sb-ws-grid">
-          <span className="sb-ws-name fade-r">{agent.label}</span>
-          <span className="sb-ws-right">
-            {busy ? <span className="sb-agent-busy" title="Travaille…"><span /><span /><span /></span> : unread > 0 ? <span className="sb-agent-unread">{unread}</span> : null}
-          </span>
-        </div>
-      </div>
-    </div>
+    <button className={`sb-agent-tile ${active ? 'active' : ''}`} onClick={onClick} title={agent.description}>
+      <span className="sb-agent-bot">
+        <BotAvatar spec={agent.avatar} seed={agent.slug} size={40} />
+        {busy ? <span className="sb-agent-badge busy"><span /><span /><span /></span> : unread > 0 ? <span className="sb-agent-badge">{unread}</span> : null}
+      </span>
+      <span className="sb-agent-name">{agent.label}</span>
+    </button>
   );
 }
