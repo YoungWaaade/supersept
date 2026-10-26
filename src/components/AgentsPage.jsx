@@ -128,7 +128,7 @@ function BotBuilder({ spec, seed, onChange }) {
       </div>
       <div className="bot-parts">
         <Row label="Couleur" part="color" options={withCurrent(PICKABLE_COLORS, a.color)} />
-        <Row label="Yeux" part="eyes" options={BOT_EYES} />
+        <Row label="Yeux" part="eyes" options={withCurrent(pickable(BOT_EYES), a.eyes)} />
         <Row label="Bouche" part="mouth" options={BOT_MOUTHS} />
         <Row label="Antenne" part="antenna" options={withCurrent(pickable(BOT_ANTENNAS), a.antenna)} />
         <Row label="Accessoire" part="accessory" options={withCurrent(pickable(BOT_ACCESSORIES), a.accessory)} />
