@@ -186,7 +186,7 @@ function startAgent(wsId) {
       refreshStats(ws.id);
     },
   });
-  if (ws.owner_agent) watchTrustPrompt(s, ws, project);
+  watchTrustPrompt(s, ws, project);
   settle(ws.id);
   return s;
 }
@@ -201,19 +201,25 @@ function trustedByUser(dir) {
   }
 }
 
-// Agent-launched sessions run unattended: a "trust this folder?" screen would block them silently.
-// Accept it only for a fresh worktree/folder of a project the user already trusted; otherwise
-// flag the session as waiting so the agent tells the user.
+// Claude Code asks "Do you trust this folder?" at launch, and never remembers the answer for the home
+// folder, so every hub restart blocked all sessions running in ~. Answer it for the user when trusting is
+// already their choice: home folder, a conversation they already worked on there, or a folder/project they
+// approved before. A brand-new session in an unknown folder still asks (that's when the check matters);
+// if an agent launched it, the agent tells the user.
+function trustIsKnown(ws, project) {
+  return real(ws.cwd) === real(homedir) || !!ws.has_conversation || trustedByUser(ws.cwd) || (project && trustedByUser(project.path));
+}
+
 function watchTrustPrompt(s, ws, project) {
   let seen = '';
   const sub = s.proc.onData((d) => {
     seen = (seen + d).slice(-4000).replace(/\x1b\[[0-9;?<>]*[a-zA-Z]/g, '');
     if (!/trust\s*this\s*folder/i.test(seen)) return;
     sub.dispose();
-    if (project && trustedByUser(project.path)) {
+    if (trustIsKnown(ws, project)) {
       setTimeout(() => { s.write('\x1b[B'); setTimeout(() => s.write('\r'), 150); }, 300);
-      logEvent(ws.id, 'trust', `Dossier accepté automatiquement (projet « ${project.name} » déjà approuvé)`);
-    } else {
+      logEvent(ws.id, 'trust', `Dossier ${ws.cwd.replace(homedir, '~')} accepté automatiquement`);
+    } else if (ws.owner_agent) {
       const msg = `Claude demande si tu fais confiance au dossier ${ws.cwd.replace(homedir, '~')} : ouvre la session et choisis « Yes, I trust this folder ».`;
       logEvent(ws.id, 'waiting', msg);
       setStatus(ws.id, 'waiting', msg);
@@ -255,7 +261,9 @@ function startAgentTab(wsId, tabId) {
     args.push('--session-id', tab.session_id);
     if (agent.initialPrompt) args.push(agent.initialPrompt);
   }
-  return spawn(`${wsId}:ag-${tabId}`, CLAUDE, args, ws.cwd, { env: { CLAUDE_HUB_WORKSPACE: ws.id } });
+  const s = spawn(`${wsId}:ag-${tabId}`, CLAUDE, args, ws.cwd, { env: { CLAUDE_HUB_WORKSPACE: ws.id } });
+  watchTrustPrompt(s, { ...ws, owner_agent: null, has_conversation: transcriptExists(ws.cwd, tab.session_id) ? 1 : ws.has_conversation }, project);
+  return s;
 }
 
 function ensureSession(key) {
