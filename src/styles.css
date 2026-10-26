@@ -946,3 +946,7 @@ body.resizing { user-select: none; cursor: col-resize; }
 .sb-agent-role { font-size: 10px; font-weight: 600; letter-spacing: 0.075em; text-transform: uppercase; color: #e9a287; }
 .msg.user.delegated { flex-direction: column; align-items: flex-end; gap: 3px; }
 .msg-from { font-size: 10.5px; font-weight: 500; color: #e9a287; padding-right: 4px; }
+/* Nami's tile uses the same grey as the "Nouvel espace de travail" button */
+.sb-agent-tile.lead { background: rgba(234, 232, 230, 0.042); box-shadow: none; }
+.sb-agent-tile.lead:hover, .sb-agent-tile.lead.active { background: var(--fill-selected); }
+.sb-agent-role { color: var(--muted-foreground); }
