@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { LuArrowUp, LuSquare, LuRotateCcw, LuSettings2, LuFolder, LuFolderPlus, LuPlay, LuLayers, LuEye, LuSend, LuArchive, LuBrain, LuSearch, LuGlobe, LuWrench, LuCheck, LuX, LuLoaderCircle, LuMegaphone, LuUsers, LuBot } from 'react-icons/lu';
-import { api } from '../api.js';
+import { LuArrowUp, LuSquare, LuRotateCcw, LuSettings2, LuFolder, LuFolderPlus, LuPlay, LuLayers, LuEye, LuSend, LuArchive, LuBrain, LuSearch, LuGlobe, LuWrench, LuCheck, LuX, LuLoaderCircle, LuMegaphone, LuUsers, LuBot, LuHistory, LuChevronDown } from 'react-icons/lu';
+import { api, ago } from '../api.js';
 import { useChat, setViewing } from '../chatStore.js';
 import BotAvatar from './BotAvatar.jsx';
 
@@ -54,6 +54,21 @@ export default function AgentChat({ agent, go }) {
   const [error, setError] = useState(null);
   const list = useRef(null);
   const input = useRef(null);
+  // Reading a previous conversation (read-only) instead of the current one.
+  const [past, setPast] = useState(null); // { conversation, messages }
+  const [convs, setConvs] = useState(null);
+  const [histOpen, setHistOpen] = useState(false);
+  const openHistory = async () => {
+    if (histOpen) return setHistOpen(false);
+    setConvs(await api.get(`/api/agents/${agent.slug}/conversations`));
+    setHistOpen(true);
+  };
+  const showConversation = async (c) => {
+    setHistOpen(false);
+    if (c.current) return setPast(null);
+    const r = await api.get(`/api/agents/${agent.slug}/chat?conversation=${c.conversation}`);
+    setPast({ ...c, messages: r.messages });
+  };
 
   useEffect(() => { setViewing(agent.slug); input.current?.focus(); return () => setViewing(null); }, [agent.slug]);
   useEffect(() => { list.current?.scrollTo({ top: list.current.scrollHeight, behavior: 'smooth' }); }, [chat?.messages.length, chat?.busy]);
@@ -72,11 +87,12 @@ export default function AgentChat({ agent, go }) {
     try { await api.post(`/api/agents/${agent.slug}/chat`, { text: v }); } catch (e) { setError(e.message); setText(v); }
   };
   const reset = async () => {
-    if (!confirm(`Commencer une nouvelle conversation avec ${agent.label} ?\nIl oubliera cette discussion (les sessions qu'il a lancées restent dans tes projets).`)) return;
+    if (!confirm(`Commencer une nouvelle conversation avec ${agent.label} ?\nL'actuelle reste lisible dans « Historique », mais ${agent.label} repartira de zéro.`)) return;
+    setPast(null);
     await api.post(`/api/agents/${agent.slug}/chat/reset`);
   };
 
-  const messages = chat?.messages || [];
+  const messages = past ? past.messages : chat?.messages || [];
   return (
     <div className="chat">
       <header className="chat-head">
@@ -86,13 +102,35 @@ export default function AgentChat({ agent, go }) {
           <span className="chat-status">{chat?.busy ? 'travaille…' : 'disponible'}</span>
         </div>
         <span className="flex-1" />
+        <span className="menu-anchor">
+          <button className="btn-ghost" onClick={openHistory}><LuHistory size={13} /> Historique <LuChevronDown size={12} /></button>
+          {histOpen && (
+            <div className="popover chat-history-menu" onMouseLeave={() => setHistOpen(false)}>
+              {(convs || []).map((c) => (
+                <button key={c.conversation} className={`popover-item conv-item ${(past ? past.conversation === c.conversation : c.current) ? 'checked' : ''}`} onClick={() => showConversation(c)}>
+                  <span className="conv-main">
+                    <span className="fade-r">{c.current ? 'Conversation actuelle' : (c.first || 'Conversation').slice(0, 80)}</span>
+                    <small>{new Date(c.started).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} · {c.count} messages · {ago(c.last)}</small>
+                  </span>
+                </button>
+              ))}
+              {convs && !convs.length && <div className="empty-note">Aucune conversation pour l'instant.</div>}
+            </div>
+          )}
+        </span>
         <button className="btn-ghost" onClick={reset} title="Nouvelle conversation"><LuRotateCcw size={13} /> Nouvelle conversation</button>
         <button className="iconbtn size-7" title="Modifier l'agent" onClick={() => go({ kind: 'agents', id: agent.slug })}><LuSettings2 size={15} /></button>
       </header>
 
+      {past && (
+        <div className="chat-past-banner">
+          Ancienne conversation du {new Date(past.started).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })}, en lecture seule.
+          <button onClick={() => setPast(null)}>Revenir à la conversation actuelle</button>
+        </div>
+      )}
       <div className="chat-list" ref={list}>
         <div className="chat-column">
-          {!messages.length && (
+          {!messages.length && !past && (
             <div className="chat-empty">
               <BotAvatar spec={agent.avatar} seed={agent.slug} size={88} className="chat-empty-bot" />
               <h2>Salut, moi c'est {agent.label}</h2>
@@ -103,13 +141,13 @@ export default function AgentChat({ agent, go }) {
             </div>
           )}
           {messages.map((m) => <Message key={m.id} m={m} agent={agent} go={go} />)}
-          {chat?.busy && messages[messages.length - 1]?.role !== 'assistant' && (
+          {!past && chat?.busy && messages[messages.length - 1]?.role !== 'assistant' && (
             <div className="msg agent"><BotAvatar spec={agent.avatar} seed={agent.slug} size={24} className="msg-bot" /><div className="msg-typing"><span /><span /><span /></div></div>
           )}
         </div>
       </div>
 
-      <div className="chat-composer">
+      <div className="chat-composer" style={past ? { display: 'none' } : undefined}>
         <div className="chat-column">
           {error && <div className="error-bar" onClick={() => setError(null)}>{error}</div>}
           <div className="chat-input">

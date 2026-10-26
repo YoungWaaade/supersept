@@ -132,6 +132,11 @@ db.exec(`CREATE TABLE IF NOT EXISTS chat_messages (
 )`);
 // Agent that delegated the current mission (e.g. Nami): replies are forwarded to it.
 addColumn('agent_chats', 'manager', 'TEXT');
+// Conversations are numbered per agent: "Nouvelle conversation" archives instead of deleting.
+addColumn('chat_messages', 'conversation', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('agent_chats', 'conversation', 'INTEGER NOT NULL DEFAULT 0');
+// Set while a turn runs, so a turn cut by a hub restart can be picked up again at boot.
+addColumn('agent_chats', 'running', 'INTEGER NOT NULL DEFAULT 0');
 // Extra agent tabs inside a workspace: each one is its own Claude conversation.
 db.exec(`CREATE TABLE IF NOT EXISTS agent_tabs (
   id TEXT PRIMARY KEY,

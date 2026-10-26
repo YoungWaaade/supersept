@@ -14,12 +14,16 @@ const running = new Map(); // agent → child process
 const queues = new Map(); // agent → pending turns
 
 let ctx = null; // { claude, port, userName, broadcast, env }
+// While the hub shuts down, keep the "running" marks so interrupted turns resume at next boot.
+let shuttingDown = false;
+for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, () => { shuttingDown = true; });
 export function initChat(c) { ctx = c; }
 
 const now = () => Date.now();
 function addMessage(agent, role, text, meta = null) {
-  const r = db.prepare('INSERT INTO chat_messages (agent, role, text, meta, at) VALUES (?, ?, ?, ?, ?)').run(agent, role, text ?? null, meta ? JSON.stringify(meta) : null, now());
-  const msg = { id: Number(r.lastInsertRowid), agent, role, text, meta, at: now() };
+  const conv = chatState(agent).conversation;
+  const r = db.prepare('INSERT INTO chat_messages (agent, role, text, meta, at, conversation) VALUES (?, ?, ?, ?, ?, ?)').run(agent, role, text ?? null, meta ? JSON.stringify(meta) : null, now(), conv);
+  const msg = { id: Number(r.lastInsertRowid), agent, role, text, meta, at: now(), conversation: conv };
   ctx.broadcast({ type: 'chat', agent, message: msg });
   return msg;
 }
@@ -29,17 +33,39 @@ function updateMessage(msg, patch) {
   ctx.broadcast({ type: 'chat', agent: msg.agent, message: msg });
 }
 
-export function chatHistory(agent) {
-  return db.prepare('SELECT * FROM chat_messages WHERE agent = ? ORDER BY id DESC LIMIT 300').all(agent)
-    .reverse().map((m) => ({ ...m, meta: m.meta ? JSON.parse(m.meta) : null }));
+// Whole conversation (the current one by default), oldest first.
+export function chatHistory(agent, conversation = null) {
+  const conv = conversation ?? chatState(agent).conversation;
+  return db.prepare('SELECT * FROM chat_messages WHERE agent = ? AND conversation = ? ORDER BY id').all(agent, conv)
+    .map((m) => ({ ...m, meta: m.meta ? JSON.parse(m.meta) : null }));
+}
+
+export function conversations(agent) {
+  const current = chatState(agent).conversation;
+  return db.prepare(`SELECT conversation, COUNT(*) AS count, MIN(at) AS started, MAX(at) AS last,
+      (SELECT text FROM chat_messages f WHERE f.agent = m.agent AND f.conversation = m.conversation AND f.role = 'user' ORDER BY id LIMIT 1) AS first
+    FROM chat_messages m WHERE agent = ? GROUP BY conversation ORDER BY conversation DESC`).all(agent)
+    .map((c) => ({ ...c, current: c.conversation === current }));
 }
 export const isBusy = (agent) => running.has(agent);
 
+// New conversation: the previous one is kept (readable from the history), Claude starts fresh.
 export function resetChat(agent) {
   stopTurn(agent);
-  db.prepare('DELETE FROM chat_messages WHERE agent = ?').run(agent);
-  db.prepare('DELETE FROM agent_chats WHERE agent = ?').run(agent);
+  const st = chatState(agent);
+  db.prepare('UPDATE agent_chats SET conversation = ?, session_id = ?, started = 0, manager = NULL WHERE agent = ?').run(st.conversation + 1, crypto.randomUUID(), agent);
   ctx.broadcast({ type: 'chat-reset', agent });
+}
+
+// At boot: tell agents whose turn was cut by the restart to check where they were.
+export function resumeInterrupted() {
+  for (const { agent } of db.prepare('SELECT agent FROM agent_chats WHERE running = 1').all()) {
+    db.prepare('UPDATE agent_chats SET running = 0 WHERE agent = ?').run(agent);
+    if (!getAgent(agent)) continue;
+    try {
+      sendToAgent(agent, "[Supersept] Ton dernier tour a été interrompu par un redémarrage de Supersept. Regarde où tu en étais (supersept sessions --mine) et termine ce qui restait à faire, sans refaire ce qui est déjà fait.", { internal: true });
+    } catch {}
+  }
 }
 
 export function stopTurn(agent) {
@@ -190,6 +216,7 @@ function runNext(agent) {
   env.SUPERSEPT_AGENT = agent;
   const child = spawn(ctx.claude, args, { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] });
   running.set(agent, child);
+  db.prepare('UPDATE agent_chats SET running = 1 WHERE agent = ?').run(agent);
   ctx.broadcast({ type: 'chat-busy', agent, busy: true });
   db.prepare('UPDATE agent_chats SET started = 1 WHERE agent = ?').run(agent);
 
@@ -236,6 +263,7 @@ function runNext(agent) {
   child.stderr.on('data', (d) => { errText += d; });
   child.on('close', (code) => {
     running.delete(agent);
+    if (!shuttingDown) db.prepare('UPDATE agent_chats SET running = 0 WHERE agent = ?').run(agent);
     // A delegated agent reports each answer back to its manager, who sums it up for the user.
     const manager = db.prepare('SELECT manager FROM agent_chats WHERE agent = ?').get(agent)?.manager;
     if (reply && manager && manager !== agent && getAgent(manager)) {

@@ -12,7 +12,7 @@ import * as git from './git.js';
 import { listSessions, lastAssistantText } from './history.js';
 import { listAgents, getAgent, saveAgent, deleteAgent, isSlug, slugify } from './agents.js';
 import { sessions, spawn, spawnShell, killWorkspace, which, homedir, childEnv } from './pty.js';
-import { initChat, sendToAgent, chatHistory, isBusy, resetChat, stopTurn } from './chat.js';
+import { initChat, sendToAgent, chatHistory, isBusy, resetChat, stopTurn, conversations, resumeInterrupted } from './chat.js';
 import * as remote from './remote.js';
 
 const PORT = Number(process.env.PORT || 4317);
@@ -740,7 +740,11 @@ app.get('/api/workspaces/:id/file', wrap(async (req, res) => {
 
 app.get('/api/agents', (req, res) => res.json(listAgents()));
 
-app.get('/api/agents/:slug/chat', (req, res) => res.json({ messages: chatHistory(req.params.slug), busy: isBusy(req.params.slug) }));
+app.get('/api/agents/:slug/chat', (req, res) => {
+  const conv = req.query.conversation !== undefined ? Number(req.query.conversation) : null;
+  res.json({ messages: chatHistory(req.params.slug, Number.isFinite(conv) ? conv : null), busy: isBusy(req.params.slug) });
+});
+app.get('/api/agents/:slug/conversations', (req, res) => res.json(conversations(req.params.slug)));
 app.post('/api/agents/:slug/chat', wrap(async (req, res) => {
   const text = String(req.body.text || '').trim();
   if (!text) throw new Error('message vide');
@@ -1001,6 +1005,8 @@ initChat({ claude: CLAUDE, port: PORT, userName: fullName || os.userInfo().usern
 
 server.listen(PORT, remote.listenHost(), () => {
   console.log(`Supersept → http://localhost:${PORT}${remote.enabled() ? ' (accès téléphone activé)' : ''}`);
+  // Chat agents whose turn was cut by the restart pick up where they were.
+  resumeInterrupted();
   // Bring back the agents that were running when the hub stopped.
   for (const { id, name } of db.prepare('SELECT id, name FROM workspaces WHERE autostart = 1 AND archived = 0').all()) {
     try { startAgent(id); console.log(`  reprise : ${name}`); }
