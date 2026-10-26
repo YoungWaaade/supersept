@@ -67,12 +67,16 @@ function draw(a) {
 
   // Antenna (drawn first, the head overlaps its base).
   if (a.antenna === 'boule') { rect(7, 1, 8, 2, 'D'); rect(7, 0, 8, 0, 'L'); }
-  if (a.antenna === 'double') { dots([[5, 2], [10, 2], [4, 1], [11, 1]], 'D'); dots([[4, 0], [11, 0]], 'L'); }
+  const round = a.shape === 'ronde';
+  // Round shape: Franky-style double antennas with blue tips matching the bow.
+  if (a.antenna === 'double' && round) { dots([[4, 2], [11, 2], [3, 1], [12, 1]], 'D'); dots([[2, 0], [3, 0], [12, 0], [13, 0]], 'U'); dots([[2, 0], [12, 0]], 'Y'); }
+  else if (a.antenna === 'double') { dots([[5, 2], [10, 2], [4, 1], [11, 1]], 'D'); dots([[4, 0], [11, 0]], 'L'); }
   if (a.antenna === 'eclair') { dots([[8, 0], [7, 1], [8, 1], [8, 2]], 'L'); dots([[7, 2]], 'D'); }
   // Hair tuft: a little ginger curl falling over the top of the head.
+  // The round shape always has its little hair curl, centred between the antennas.
+  if (round && a.antenna !== 'meche') dots([[7, 1], [8, 1], [6, 2], [7, 2], [8, 2], [9, 2]], 'H');
   if (a.antenna === 'meche') { dots([[6, 1], [7, 0], [8, 0], [9, 1], [7, 1], [8, 1], [5, 2], [6, 2], [7, 2]], 'H'); dots([[8, 1], [6, 2]], 'D'); }
 
-  const round = a.shape === 'ronde';
   if (round) {
     // Round head (Nami): a soft circle-ish outline instead of a box, small ears.
     const rows = { 3: [4, 11], 4: [3, 12], 5: [2, 13], 6: [2, 13], 7: [2, 13], 8: [2, 13], 9: [2, 13], 10: [2, 13], 11: [3, 12], 12: [4, 11] };
@@ -143,7 +147,12 @@ function draw(a) {
   if (a.accessory === 'casque') { rect(3, 2, 12, 2, 'G'); dots([[2, 3], [13, 3]], 'G'); rect(0, 5, 1, 10, 'G'); rect(14, 5, 15, 10, 'G'); }
   if (a.accessory === 'noeud') { dots([[10, 2], [11, 1], [11, 2], [11, 3], [13, 1], [13, 2], [13, 3], [14, 2]], 'C'); set(12, 2, 'L'); }
   // Big blue bow on the side of the head.
-  if (a.accessory === 'ruban') {
+  if (a.accessory === 'ruban' && round) {
+    // On the round head the bow sits on the side, like a hair clip, leaving room for the antennas.
+    dots([[11, 3], [11, 4], [11, 5], [12, 4]], 'U');
+    dots([[14, 4], [15, 3], [15, 4], [15, 5]], 'U');
+    dots([[13, 4]], 'V'); dots([[11, 3], [15, 3]], 'Y');
+  } else if (a.accessory === 'ruban') {
     dots([[9, 1], [10, 1], [9, 2], [10, 2], [11, 2], [9, 3], [10, 3]], 'U');
     dots([[13, 1], [14, 1], [12, 2], [13, 2], [14, 2], [13, 3], [14, 3]], 'U');
     set(12, 2, 'V'); set(11, 2, 'V'); dots([[9, 1], [14, 1]], 'Y');
