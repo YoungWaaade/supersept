@@ -103,23 +103,17 @@ function draw(a) {
   [[4, 5], [11, 5], [4, 10], [11, 10]].forEach(([x, y]) => set(x, y, 'B'));
   if (round) { rect(3, 6, 3, 9, 'F'); rect(12, 6, 12, 9, 'F'); }
 
-  // Eyes.
-  if (a.eyes === 'ronds') { rect(5, 6, 6, 7, 'S'); rect(9, 6, 10, 7, 'S'); dots([[5, 6], [9, 6]], 'W'); }
-  if (a.eyes === 'pixels') { rect(6, 6, 6, 7, 'S'); rect(9, 6, 9, 7, 'S'); }
-  if (a.eyes === 'joyeux') { dots([[5, 7], [6, 6], [7, 7], [8, 7], [9, 6], [10, 7]], 'S'); }
-  if (a.eyes === 'endormis') { rect(5, 7, 6, 7, 'S'); rect(9, 7, 10, 7, 'S'); }
-  // Big eyes with a sparkle and a lash on the outer corner.
+  // Eyes: big eyes, no mouth (that's the whole face, and it's cuter that way).
+  if (a.eyes === 'ronds') { rect(5, 6, 6, 8, 'S'); rect(9, 6, 10, 8, 'S'); dots([[5, 6], [9, 6]], 'W'); }
+  if (a.eyes === 'pixels') { rect(6, 6, 6, 8, 'S'); rect(9, 6, 9, 8, 'S'); dots([[6, 6], [9, 6]], 'W'); }
+  if (a.eyes === 'joyeux') { dots([[4, 8], [5, 7], [6, 7], [7, 8], [8, 8], [9, 7], [10, 7], [11, 8]], 'S'); px.delete('7,8'); px.delete('8,8'); set(7, 8, 'F'); set(8, 8, 'F'); dots([[4, 8], [11, 8]], 'S'); }
+  if (a.eyes === 'endormis') { rect(4, 8, 6, 8, 'S'); rect(9, 8, 11, 8, 'S'); dots([[4, 7], [11, 7]], 'S'); }
   if (a.eyes === 'cils' && round) {
     // Big, tall, wide-set eyes (2×3) with a sparkle on top and a lash flicking outwards.
     rect(4, 6, 5, 8, 'S'); rect(10, 6, 11, 8, 'S'); dots([[4, 6], [10, 6]], 'W'); dots([[3, 6], [12, 6]], 'S');
-  } else if (a.eyes === 'cils') { rect(5, 6, 6, 7, 'S'); rect(9, 6, 10, 7, 'S'); dots([[5, 6], [9, 6]], 'W'); dots([[4, 6], [11, 6]], 'S'); }
-  if (a.eyes === 'etoiles') { dots([[6, 6], [5, 7], [7, 7], [6, 8], [9, 6], [8, 7], [10, 7], [9, 8]], 'B'); dots([[6, 7], [9, 7]], 'W'); }
+  } else if (a.eyes === 'cils') { rect(5, 6, 6, 8, 'S'); rect(9, 6, 10, 8, 'S'); dots([[5, 6], [9, 6]], 'W'); dots([[4, 6], [11, 6]], 'S'); }
+  if (a.eyes === 'etoiles') { dots([[5, 6], [4, 7], [5, 7], [6, 7], [5, 8], [10, 6], [9, 7], [10, 7], [11, 7], [10, 8]], 'B'); dots([[5, 7], [10, 7]], 'W'); }
 
-  // Mouth.
-  if (a.mouth === 'sourire') dots([[6, 9], [7, 10], [8, 10], [9, 9]], 'S');
-  if (a.mouth === 'o') rect(7, 9, 8, 10, 'S');
-  if (a.mouth === 'neutre') rect(7, 9, 8, 9, 'S');
-  if (a.mouth === 'langue') { dots([[6, 9], [9, 9]], 'S'); rect(7, 9, 8, 9, 'S'); rect(7, 10, 8, 10, 'C'); }
   // Cheeks: always a little blush, it's what makes them cute.
   dots([[4, 9], [11, 9]], 'C');
   if (round) { px.delete('4,9'); px.delete('11,9'); dots([[3, 9], [4, 9], [11, 9], [12, 9]], 'C'); }
