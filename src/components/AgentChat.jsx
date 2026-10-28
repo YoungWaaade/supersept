@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { LuArrowUp, LuSquare, LuRotateCcw, LuSettings2, LuFolder, LuFolderPlus, LuPlay, LuLayers, LuEye, LuSend, LuArchive, LuBrain, LuSearch, LuGlobe, LuWrench, LuCheck, LuX, LuLoaderCircle, LuMegaphone, LuUsers, LuBot, LuHistory, LuChevronDown } from 'react-icons/lu';
-import { api, ago } from '../api.js';
-import { useChat, setViewing } from '../chatStore.js';
+import { LuArrowUp, LuSquare, LuSettings2, LuFolder, LuFolderPlus, LuPlay, LuLayers, LuEye, LuSend, LuArchive, LuBrain, LuSearch, LuGlobe, LuWrench, LuCheck, LuX, LuLoaderCircle, LuMegaphone, LuUsers, LuBot, LuHistory, LuChevronDown, LuPlus, LuMessageSquare, LuImagePlus, LuImage } from 'react-icons/lu';
+import { api, ago, uploadFile, attachmentUrl, imageFiles } from '../api.js';
+import { useChat, useConvs, loadConvs, setViewing, useChatBadges } from '../chatStore.js';
 import BotAvatar from './BotAvatar.jsx';
 
-const ICONS = { folder: LuFolder, 'folder-plus': LuFolderPlus, play: LuPlay, layers: LuLayers, eye: LuEye, send: LuSend, archive: LuArchive, brain: LuBrain, search: LuSearch, globe: LuGlobe, tool: LuWrench, users: LuUsers, bot: LuBot };
+const ICONS = { folder: LuFolder, 'folder-plus': LuFolderPlus, play: LuPlay, layers: LuLayers, eye: LuEye, send: LuSend, archive: LuArchive, brain: LuBrain, search: LuSearch, globe: LuGlobe, tool: LuWrench, users: LuUsers, bot: LuBot, image: LuImage };
 const SUGGESTIONS = [
   'Qu\'est-ce que tu peux faire pour moi ?',
   'Fais le point sur mes sessions en cours',
@@ -48,89 +48,170 @@ function systemLabel(text) {
   return m[2] === 'vient de terminer' ? `Session « ${m[1]} » terminée` : `Session « ${m[1]} » attend une réponse`;
 }
 
-export default function AgentChat({ agent, go }) {
-  const chat = useChat(agent.slug);
-  const [text, setText] = useState('');
-  const [error, setError] = useState(null);
-  const list = useRef(null);
-  const input = useRef(null);
-  // Reading a previous conversation (read-only) instead of the current one.
-  const [past, setPast] = useState(null); // { conversation, messages }
-  const [convs, setConvs] = useState(null);
-  const [histOpen, setHistOpen] = useState(false);
-  const openHistory = async () => {
-    if (histOpen) return setHistOpen(false);
-    setConvs(await api.get(`/api/agents/${agent.slug}/conversations`));
-    setHistOpen(true);
-  };
-  const showConversation = async (c) => {
-    setHistOpen(false);
-    if (c.current) return setPast(null);
-    const r = await api.get(`/api/agents/${agent.slug}/chat?conversation=${c.conversation}`);
-    setPast({ ...c, messages: r.messages });
-  };
+const convTitle = (c) => c.title || (c.first ? c.first.replace(/\s+/g, ' ').slice(0, 60) : 'Nouvelle conversation');
+const lastKey = (slug) => `supersept.conv.${slug}`;
 
-  useEffect(() => { setViewing(agent.slug); input.current?.focus(); return () => setViewing(null); }, [agent.slug]);
-  useEffect(() => { list.current?.scrollTo({ top: list.current.scrollHeight, behavior: 'smooth' }); }, [chat?.messages.length, chat?.busy]);
+export default function AgentChat({ agent, go }) {
+  const { list, loaded } = useConvs(agent.slug);
+  const badges = useChatBadges();
+  // Open conversations are tabs, in the order they were started; the others stay in the history.
+  const open = list.filter((c) => c.open).sort((a, b) => a.conversation - b.conversation);
+  const [active, setActive] = useState(() => {
+    const v = localStorage.getItem(lastKey(agent.slug));
+    return v === null ? null : Number(v);
+  });
+  const chat = useChat(agent.slug, active);
+  const drafts = useRef(new Map()); // conversation → unsent text
+  const [text, setText] = useState('');
+  const [images, setImages] = useState([]); // [{ path, name }]
+  const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [error, setError] = useState(null);
+  const [histOpen, setHistOpen] = useState(false);
+  const [renaming, setRenaming] = useState(null);
+  const list_ = useRef(null);
+  const input = useRef(null);
+  const fileInput = useRef(null);
+
+  // Keep the selected tab valid: fall back to the last active open conversation.
   useEffect(() => {
+    if (!loaded) return;
+    if (active !== null && open.some((c) => c.conversation === active)) return;
+    const next = list.find((c) => c.open);
+    setActive(next ? next.conversation : null);
+  }, [loaded, list, active]);
+  useEffect(() => {
+    if (active !== null) localStorage.setItem(lastKey(agent.slug), String(active));
+    setViewing(agent.slug, active);
+    setText(drafts.current.get(active) || '');
+    input.current?.focus();
+  }, [agent.slug, active]);
+  useEffect(() => () => setViewing(null), []);
+  useEffect(() => { list_.current?.scrollTo({ top: list_.current.scrollHeight, behavior: 'smooth' }); }, [chat?.messages.length, chat?.busy, active]);
+  useEffect(() => {
+    drafts.current.set(active, text);
     const el = input.current;
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = Math.min(180, el.scrollHeight) + 'px';
   }, [text]);
 
-  const send = async (t = text) => {
-    const v = t.trim();
-    if (!v) return;
-    setText('');
-    setError(null);
-    try { await api.post(`/api/agents/${agent.slug}/chat`, { text: v }); } catch (e) { setError(e.message); setText(v); }
+  const select = async (c) => {
+    setHistOpen(false);
+    if (!c.open) { await api.patch(`/api/agents/${agent.slug}/conversations/${c.conversation}`, { open: true }); await loadConvs(agent.slug); }
+    setActive(c.conversation);
   };
-  const reset = async () => {
-    if (!confirm(`Commencer une nouvelle conversation avec ${agent.label} ?\nL'actuelle reste lisible dans « Historique », mais ${agent.label} repartira de zéro.`)) return;
-    setPast(null);
-    await api.post(`/api/agents/${agent.slug}/chat/reset`);
+  const newConv = async () => {
+    const r = await api.post(`/api/agents/${agent.slug}/conversations`);
+    await loadConvs(agent.slug);
+    setActive(r.conversation);
+  };
+  const closeConv = async (c) => {
+    if (c.conversation === active) {
+      const i = open.findIndex((x) => x.conversation === c.conversation);
+      const next = open[i + 1] || open[i - 1];
+      setActive(next ? next.conversation : null);
+    }
+    await api.patch(`/api/agents/${agent.slug}/conversations/${c.conversation}`, { open: false });
+    loadConvs(agent.slug);
+  };
+  const rename = async (c, title) => {
+    setRenaming(null);
+    if (title.trim() !== convTitle(c)) await api.patch(`/api/agents/${agent.slug}/conversations/${c.conversation}`, { title });
   };
 
-  const messages = past ? past.messages : chat?.messages || [];
+  const upload = async (files) => {
+    const imgs = imageFiles(files).slice(0, 8 - images.length);
+    if (!imgs.length) return false;
+    setUploading(true);
+    setError(null);
+    try {
+      for (const f of imgs) { const a = await uploadFile(f); setImages((l) => [...l, a]); }
+    } catch (e) { setError(e.message); }
+    setUploading(false);
+    input.current?.focus();
+    return true;
+  };
+
+  const send = async (t = text) => {
+    const v = t.trim();
+    if (!v && !images.length) return;
+    const imgs = images;
+    setText('');
+    setImages([]);
+    setError(null);
+    try {
+      const r = await api.post(`/api/agents/${agent.slug}/chat`, { text: v, conversation: active, images: imgs });
+      if (r.conversation !== active) { await loadConvs(agent.slug); setActive(r.conversation); }
+    } catch (e) { setError(e.message); setText(v); setImages(imgs); }
+  };
+
+  const messages = chat?.messages || [];
   return (
-    <div className="chat">
+    <div className={`chat ${dragging ? 'dragging' : ''}`}
+      onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true); } }}
+      onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget) && setDragging(false)}
+      onDrop={(e) => { if (!e.dataTransfer.files.length) return; e.preventDefault(); setDragging(false); upload(e.dataTransfer.files); }}>
       <header className="chat-head">
         <BotAvatar spec={agent.avatar} seed={agent.slug} size={22} />
         <div className="chat-head-text">
           <span className="chat-name">{agent.label}</span>
-          <span className="chat-status">{chat?.busy ? 'travaille…' : 'disponible'}</span>
+          <span className="chat-status">{chat?.busy ? 'travaille…' : badges.busy(agent.slug) ? 'travaille dans une autre conversation…' : 'disponible'}</span>
         </div>
         <span className="flex-1" />
         <span className="menu-anchor">
-          <button className="btn-ghost" onClick={openHistory}><LuHistory size={13} /> Historique <LuChevronDown size={12} /></button>
+          <button className="btn-ghost" onClick={() => setHistOpen((v) => !v)}><LuHistory size={13} /> Historique <LuChevronDown size={12} /></button>
           {histOpen && (
             <div className="popover chat-history-menu" onMouseLeave={() => setHistOpen(false)}>
-              {(convs || []).map((c) => (
-                <button key={c.conversation} className={`popover-item conv-item ${(past ? past.conversation === c.conversation : c.current) ? 'checked' : ''}`} onClick={() => showConversation(c)}>
+              {list.map((c) => (
+                <button key={c.conversation} className={`popover-item conv-item ${c.conversation === active ? 'checked' : ''}`} onClick={() => select(c)}>
                   <span className="conv-main">
-                    <span className="fade-r">{c.current ? 'Conversation actuelle' : (c.first || 'Conversation').slice(0, 80)}</span>
-                    <small>{new Date(c.started).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} · {c.count} messages · {ago(c.last)}</small>
+                    <span className="fade-r">{convTitle(c)}</span>
+                    <small>{new Date(c.started).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} · {c.count} messages · {ago(c.last)}{c.open ? ' · ouverte' : ''}</small>
                   </span>
                 </button>
               ))}
-              {convs && !convs.length && <div className="empty-note">Aucune conversation pour l'instant.</div>}
+              {loaded && !list.length && <div className="empty-note">Aucune conversation pour l'instant.</div>}
             </div>
           )}
         </span>
-        <button className="btn-ghost" onClick={reset} title="Nouvelle conversation"><LuRotateCcw size={13} /> Nouvelle conversation</button>
         <button className="iconbtn size-7" title="Modifier l'agent" onClick={() => go({ kind: 'agents', id: agent.slug })}><LuSettings2 size={15} /></button>
       </header>
 
-      {past && (
-        <div className="chat-past-banner">
-          Ancienne conversation du {new Date(past.started).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })}, en lecture seule.
-          <button onClick={() => setPast(null)}>Revenir à la conversation actuelle</button>
+      <div className="tabbar chat-tabs">
+        <div className="tabbar-scroll">
+          <div className="tabbar-inner">
+            {open.map((c) => {
+              const busy = badges.busyConv(agent.slug, c.conversation);
+              const unreadN = badges.unreadConv(agent.slug, c.conversation);
+              return (
+                <div className="tab-cell" key={c.conversation}>
+                  <div className={`tab ${c.conversation === active ? 'active' : ''}`} onClick={() => setActive(c.conversation)} onDoubleClick={() => setRenaming(c.conversation)} title={`${convTitle(c)}\nDouble-clic pour renommer`}>
+                    <div className="tab-title">
+                      {busy ? <LuLoaderCircle size={12} className="spin chat-tab-busy" /> : <LuMessageSquare size={12} />}
+                      {renaming === c.conversation ? (
+                        <input className="chat-tab-rename" autoFocus defaultValue={convTitle(c)} onClick={(e) => e.stopPropagation()}
+                          onBlur={(e) => rename(c, e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setRenaming(null); }} />
+                      ) : <span className="tab-label fade-r">{convTitle(c)}</span>}
+                      {unreadN > 0 && <span className="chat-tab-unread">{unreadN}</span>}
+                    </div>
+                    <div className="tab-close-slot">
+                      <button className="tab-close" title="Fermer (elle reste dans l'historique)" onClick={(e) => { e.stopPropagation(); closeConv(c); }}><LuX size={14} /></button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            <div className="tab-add-cell"><button className="tab-add" title="Nouvelle conversation" onClick={newConv}><LuPlus size={14} /></button></div>
+            <div className="tab-filler" />
+          </div>
         </div>
-      )}
-      <div className="chat-list" ref={list}>
+      </div>
+
+      <div className="chat-list" ref={list_}>
         <div className="chat-column">
-          {!messages.length && !past && (
+          {!messages.length && (
             <div className="chat-empty">
               <BotAvatar spec={agent.avatar} seed={agent.slug} size={88} className="chat-empty-bot" />
               <h2>Salut, moi c'est {agent.label}</h2>
@@ -141,27 +222,44 @@ export default function AgentChat({ agent, go }) {
             </div>
           )}
           {messages.map((m) => <Message key={m.id} m={m} agent={agent} go={go} />)}
-          {!past && chat?.busy && messages[messages.length - 1]?.role !== 'assistant' && (
+          {chat?.busy && messages[messages.length - 1]?.role !== 'assistant' && (
             <div className="msg agent"><BotAvatar spec={agent.avatar} seed={agent.slug} size={24} className="msg-bot" /><div className="msg-typing"><span /><span /><span /></div></div>
           )}
         </div>
       </div>
 
-      <div className="chat-composer" style={past ? { display: 'none' } : undefined}>
+      <div className="chat-composer">
         <div className="chat-column">
           {error && <div className="error-bar" onClick={() => setError(null)}>{error}</div>}
           <div className="chat-input">
-            <textarea ref={input} rows={1} value={text} placeholder={`Écris à ${agent.label}…`} onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
-            {chat?.busy && !text ? (
-              <button className="chat-send stop" title="Arrêter" onClick={() => api.post(`/api/agents/${agent.slug}/chat/stop`)}><LuSquare size={12} /></button>
-            ) : (
-              <button className="chat-send" title="Envoyer (↵)" disabled={!text.trim()} onClick={() => send()}><LuArrowUp size={14} /></button>
+            {(images.length > 0 || uploading) && (
+              <div className="chat-thumbs">
+                {images.map((a) => (
+                  <span key={a.path} className="chat-thumb">
+                    <img src={attachmentUrl(a.path)} alt={a.name} />
+                    <button type="button" title="Retirer" onClick={() => setImages((l) => l.filter((x) => x !== a))}><LuX size={10} /></button>
+                  </span>
+                ))}
+                {uploading && <span className="chat-thumb loading"><LuLoaderCircle size={14} className="spin" /></span>}
+              </div>
             )}
+            <div className="chat-input-row">
+              <button className="chat-attach" title="Ajouter une image (ou colle-la, ou glisse-la ici)" onClick={() => fileInput.current.click()}><LuImagePlus size={16} /></button>
+              <input ref={fileInput} type="file" accept="image/*" multiple hidden onChange={(e) => { upload(e.target.files); e.target.value = ''; }} />
+              <textarea ref={input} rows={1} value={text} placeholder={`Écris à ${agent.label}…`} onChange={(e) => setText(e.target.value)}
+                onPaste={(e) => { if (imageFiles(e.clipboardData.files).length) { e.preventDefault(); upload(e.clipboardData.files); } }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} />
+              {chat?.busy && !text && !images.length ? (
+                <button className="chat-send stop" title="Arrêter" onClick={() => api.post(`/api/agents/${agent.slug}/chat/stop`, { conversation: active })}><LuSquare size={12} /></button>
+              ) : (
+                <button className="chat-send" title="Envoyer (↵)" disabled={(!text.trim() && !images.length) || uploading} onClick={() => send()}><LuArrowUp size={14} /></button>
+              )}
+            </div>
           </div>
           <div className="chat-hint">Le travail avance en arrière-plan dans tes projets, et tu es prévenu quand c'est fait.</div>
         </div>
       </div>
+      {dragging && <div className="chat-drop">Dépose ton image pour l'envoyer à {agent.label}</div>}
     </div>
   );
 }
@@ -171,7 +269,12 @@ function Message({ m, agent, go }) {
     return (
       <div className={`msg user ${m.meta?.from ? 'delegated' : ''}`}>
         {m.meta?.from && <span className="msg-from">de {m.meta.fromLabel}</span>}
-        <div className="msg-bubble">{m.text}</div>
+        {m.meta?.images?.length > 0 && (
+          <div className="msg-images">
+            {m.meta.images.map((i) => <a key={i.path} href={attachmentUrl(i.path)} target="_blank" rel="noreferrer"><img src={attachmentUrl(i.path)} alt={i.name} /></a>)}
+          </div>
+        )}
+        {m.text && <div className="msg-bubble">{m.text}</div>}
       </div>
     );
   }

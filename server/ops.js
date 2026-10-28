@@ -6,7 +6,7 @@ const AGENT = () => process.env.SUPERSEPT_AGENT || null;
 async function call(method, path, body) {
   const res = await fetch(BASE() + path, {
     method,
-    headers: { 'Content-Type': 'application/json', 'X-Supersept-Agent': AGENT() || '' },
+    headers: { 'Content-Type': 'application/json', 'X-Supersept-Agent': AGENT() || '', 'X-Supersept-Conv': process.env.SUPERSEPT_CONV || '' },
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));

@@ -1,9 +1,9 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { LuPlus, LuSettings, LuPanelRight, LuPanelRightOpen, LuPanelRightClose, LuZap, LuCopy, LuGitFork, LuSquarePen, LuSquareTerminal, LuX, LuCheck, LuGitCompareArrows, LuFile, LuPlay } from 'react-icons/lu';
+import { LuPlus, LuSettings, LuPanelRight, LuPanelRightOpen, LuPanelRightClose, LuZap, LuCopy, LuGitFork, LuSquarePen, LuSquareTerminal, LuX, LuCheck, LuGitCompareArrows, LuFile, LuPlay, LuImagePlus } from 'react-icons/lu';
 import { HiMiniXMark, HiMiniCommandLine } from 'react-icons/hi2';
 import { TbLayoutColumns } from 'react-icons/tb';
 import { api } from '../api.js';
-import Terminal, { restartTerminal, killTerminal, focusTerminal, useTerminalTitle, sendInput } from './Terminal.jsx';
+import Terminal, { restartTerminal, killTerminal, focusTerminal, useTerminalTitle, sendInput, attachToTerminal } from './Terminal.jsx';
 import DiffView, { FileViewer } from './DiffView.jsx';
 import RightPanel from './RightPanel.jsx';
 import { StatusIndicator } from './ui.jsx';
@@ -271,6 +271,7 @@ function Pane({ ws, pane, termKey, visible, split, focused, onFocus, onSplit, on
   const [renaming, setRenaming] = useState(false);
   const [copied, setCopied] = useState(false);
   const input = useRef(null);
+  const fileInput = useRef(null);
   const title = isAgent ? osc || ws.name : agent ? `${agent.label}${osc ? ` · ${osc}` : ''}` : pane === 'run' ? `Run · ${osc || 'commande du projet'}` : osc || 'Terminal';
 
   const rename = () => {
@@ -304,6 +305,8 @@ function Pane({ ws, pane, termKey, visible, split, focused, onFocus, onSplit, on
             {isAgent && (
               <button className="pane-action" title={ws.running ? 'Relancer Claude' : ws.has_conversation ? 'Reprendre la conversation' : 'Lancer Claude'} onClick={() => restartTerminal(termKey)}><LuZap size={14} /></button>
             )}
+            <button className="pane-action" title="Joindre une image (ou colle-la / glisse-la dans le terminal)" onClick={() => fileInput.current.click()}><LuImagePlus size={14} /></button>
+            <input ref={fileInput} type="file" accept="image/*" multiple hidden onChange={(e) => { attachToTerminal(termKey, e.target.files).catch((err) => alert(err.message)); e.target.value = ''; }} />
             <button className="pane-action" title={copied ? 'Copié !' : 'Copier le chemin'} onClick={copyPath}>{copied ? <LuCheck size={14} /> : <LuCopy size={14} />}</button>
             {isAgent && <button className="pane-action" title="Forker la conversation dans un nouvel espace" onClick={() => onFork(ws)}><LuGitFork size={14} /></button>}
             {isAgent && <button className="pane-action strong" title="Renommer l'espace" onClick={() => setRenaming(true)}><LuSquarePen size={14} /></button>}

@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 
 export const HUB_DIR = process.env.CLAUDE_HUB_DIR || path.join(os.homedir(), '.claude-hub');
 export const MEMORY_DIR = path.join(HUB_DIR, 'memory');
@@ -137,6 +138,36 @@ addColumn('chat_messages', 'conversation', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('agent_chats', 'conversation', 'INTEGER NOT NULL DEFAULT 0');
 // Set while a turn runs, so a turn cut by a hub restart can be picked up again at boot.
 addColumn('agent_chats', 'running', 'INTEGER NOT NULL DEFAULT 0');
+// Several conversations per agent, each with its own Claude session, queue and manager, open side by side.
+db.exec(`CREATE TABLE IF NOT EXISTS agent_convs (
+  agent TEXT NOT NULL,
+  conversation INTEGER NOT NULL,
+  session_id TEXT NOT NULL,
+  started INTEGER NOT NULL DEFAULT 0,
+  manager TEXT,
+  manager_conv INTEGER,
+  running INTEGER NOT NULL DEFAULT 0,
+  open INTEGER NOT NULL DEFAULT 1,
+  title TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (agent, conversation)
+)`);
+// Migrate the single-conversation model: the current one keeps its Claude session; older ones were
+// reset (their Claude context is gone), they restart from a recap of their messages if continued.
+if (!db.prepare('SELECT 1 FROM agent_convs LIMIT 1').get()) {
+  const ins = db.prepare('INSERT OR IGNORE INTO agent_convs (agent, conversation, session_id, started, manager, manager_conv, running, open, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  const chats = db.prepare('SELECT * FROM agent_chats').all();
+  for (const c of chats) {
+    const managerConv = c.manager ? chats.find((x) => x.agent === c.manager)?.conversation ?? null : null;
+    ins.run(c.agent, c.conversation, c.session_id, c.started, c.manager, managerConv, c.running, 1, c.created_at, Date.now());
+  }
+  for (const m of db.prepare('SELECT agent, conversation, MIN(at) AS first, MAX(at) AS last FROM chat_messages GROUP BY agent, conversation').all()) {
+    ins.run(m.agent, m.conversation, crypto.randomUUID(), 0, null, null, 0, 0, m.first, m.last);
+  }
+}
+// Sessions launched from a given conversation report back to that conversation.
+addColumn('workspaces', 'owner_conv', 'INTEGER');
 // Extra agent tabs inside a workspace: each one is its own Claude conversation.
 db.exec(`CREATE TABLE IF NOT EXISTS agent_tabs (
   id TEXT PRIMARY KEY,

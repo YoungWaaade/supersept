@@ -34,3 +34,19 @@ export const STATUS = {
   idle: { label: 'Inactif', color: 'var(--muted-foreground)' },
   done: { label: 'Terminé', color: 'var(--dim)' },
 };
+
+// Upload a file to ~/.claude-hub/attachments; returns { path, name, size }.
+export async function uploadFile(f) {
+  if (f.size > 10 * 1024 * 1024) throw new Error(`${f.name || 'Le fichier'} dépasse 10 Mo`);
+  const name = f.name || `image-${Date.now()}.${(f.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}`;
+  const res = await fetch(`/api/attachments?name=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "l'envoi du fichier a échoué");
+  return data;
+}
+// …/attachments/<id>/<name> → the URL serving it.
+export const attachmentUrl = (p) => {
+  const [id, name] = String(p).split('/').slice(-2);
+  return `/api/attachments/${encodeURIComponent(id)}/${encodeURIComponent(name)}`;
+};
+export const imageFiles = (list) => [...(list || [])].filter((f) => f.type?.startsWith('image/'));

@@ -12,7 +12,7 @@ import * as git from './git.js';
 import { listSessions, lastAssistantText } from './history.js';
 import { listAgents, getAgent, saveAgent, deleteAgent, isSlug, slugify } from './agents.js';
 import { sessions, spawn, spawnShell, killWorkspace, which, homedir, childEnv } from './pty.js';
-import { initChat, sendToAgent, chatHistory, isBusy, resetChat, stopTurn, conversations, resumeInterrupted } from './chat.js';
+import { initChat, sendToAgent, chatHistory, isBusy, resetChat, stopTurn, conversations, resumeInterrupted, newConversation, updateConversation } from './chat.js';
 import * as remote from './remote.js';
 
 const PORT = Number(process.env.PORT || 4317);
@@ -626,7 +626,10 @@ app.post('/api/workspaces', wrap(async (req, res) => {
   if (req.body.agent && getAgent(req.body.agent)) db.prepare('UPDATE workspaces SET agent = ? WHERE id = ?').run(req.body.agent, id);
   // Sessions launched by a chat agent report back to it when they finish.
   const owner = req.body.ownerAgent || req.get('X-Supersept-Agent');
-  if (owner && getAgent(owner)) db.prepare('UPDATE workspaces SET owner_agent = ? WHERE id = ?').run(owner, id);
+  if (owner && getAgent(owner)) {
+    const conv = req.get('X-Supersept-Conv');
+    db.prepare('UPDATE workspaces SET owner_agent = ?, owner_conv = ? WHERE id = ?').run(owner, conv && /^\d+$/.test(conv) ? Number(conv) : null, id);
+  }
   db.prepare('UPDATE workspaces SET model = ?, effort = ?, permission_mode = ? WHERE id = ?').run(
     MODELS.includes(req.body.model) ? req.body.model : null,
     EFFORTS.includes(req.body.effort) ? req.body.effort : null,
@@ -748,20 +751,35 @@ app.get('/api/workspaces/:id/file', wrap(async (req, res) => {
 
 app.get('/api/agents', (req, res) => res.json(listAgents()));
 
+const convNum = (v) => (v !== undefined && v !== null && v !== '' && Number.isInteger(Number(v)) ? Number(v) : null);
 app.get('/api/agents/:slug/chat', (req, res) => {
-  const conv = req.query.conversation !== undefined ? Number(req.query.conversation) : null;
-  res.json({ messages: chatHistory(req.params.slug, Number.isFinite(conv) ? conv : null), busy: isBusy(req.params.slug) });
+  const conv = convNum(req.query.conversation);
+  res.json({ messages: chatHistory(req.params.slug, conv), busy: isBusy(req.params.slug, conv) });
 });
 app.get('/api/agents/:slug/conversations', (req, res) => res.json(conversations(req.params.slug)));
-app.post('/api/agents/:slug/chat', wrap(async (req, res) => {
-  const text = String(req.body.text || '').trim();
-  if (!text) throw new Error('message vide');
-  const from = req.get('X-Supersept-Agent') || null;
-  sendToAgent(req.params.slug, text, { from: from && getAgent(from) ? from : null });
+app.post('/api/agents/:slug/conversations', (req, res) => res.json({ conversation: newConversation(req.params.slug) }));
+app.patch('/api/agents/:slug/conversations/:n', wrap(async (req, res) => {
+  updateConversation(req.params.slug, Number(req.params.n), req.body);
   res.json({ ok: true });
 }));
-app.post('/api/agents/:slug/chat/stop', (req, res) => { stopTurn(req.params.slug); res.json({ ok: true }); });
-app.post('/api/agents/:slug/chat/reset', (req, res) => { resetChat(req.params.slug); res.json({ ok: true }); });
+// Images attached in the chat: only files saved by /api/attachments.
+const attachmentList = (list) => (Array.isArray(list) ? list : []).slice(0, 8).map((a) => {
+  const file = path.resolve(String(a.path || ''));
+  if (!file.startsWith(path.join(HUB_DIR, 'attachments') + path.sep) || !fs.existsSync(file)) throw new Error('pièce jointe introuvable');
+  return { path: file, name: path.basename(file) };
+});
+app.post('/api/agents/:slug/chat', wrap(async (req, res) => {
+  const images = attachmentList(req.body.images);
+  const text = String(req.body.text || '').trim() || (images.length ? 'Regarde cette image.' : '');
+  if (!text) throw new Error('message vide');
+  const from = req.get('X-Supersept-Agent') || null;
+  const sender = from && getAgent(from) ? from : null;
+  const conversation = sender ? null : convNum(req.body.conversation);
+  const conv = sendToAgent(req.params.slug, text, { from: sender, fromConv: sender ? convNum(req.get('X-Supersept-Conv')) : null, conversation, images });
+  res.json({ ok: true, conversation: conv });
+}));
+app.post('/api/agents/:slug/chat/stop', (req, res) => { stopTurn(req.params.slug, convNum(req.body?.conversation)); res.json({ ok: true }); });
+app.post('/api/agents/:slug/chat/reset', (req, res) => res.json({ conversation: resetChat(req.params.slug) }));
 
 // Type a message into a session's Claude (used by chat agents to answer or follow up).
 app.post('/api/workspaces/:id/send', wrap(async (req, res) => {
@@ -804,6 +822,8 @@ app.put('/api/agents/:slug', wrap(async (req, res) => {
     // Keep its chat and the sessions it launched attached to the renamed agent.
     db.prepare('UPDATE workspaces SET owner_agent = ? WHERE owner_agent = ?').run(slug, req.params.slug);
     db.prepare('UPDATE agent_chats SET manager = ? WHERE manager = ?').run(slug, req.params.slug);
+    db.prepare('UPDATE agent_convs SET manager = ? WHERE manager = ?').run(slug, req.params.slug);
+    if (!db.prepare('SELECT 1 FROM agent_convs WHERE agent = ?').get(slug)) db.prepare('UPDATE agent_convs SET agent = ? WHERE agent = ?').run(slug, req.params.slug);
     if (!db.prepare('SELECT 1 FROM agent_chats WHERE agent = ?').get(slug)) {
       db.prepare('UPDATE agent_chats SET agent = ? WHERE agent = ?').run(slug, req.params.slug);
       db.prepare('UPDATE chat_messages SET agent = ? WHERE agent = ?').run(slug, req.params.slug);
@@ -846,12 +866,20 @@ app.get('/api/prompts', (req, res) => {
 
 // Attachments are saved on disk and handed to Claude as @file references.
 app.post('/api/attachments', express.raw({ type: '*/*', limit: '10mb' }), (req, res) => {
-  const name = path.basename(String(req.query.name || 'fichier')).replace(/[^\w.\- ]/g, '_') || 'fichier';
+  const name = path.basename(String(req.query.name || 'fichier')).replace(/[^\w.-]/g, '_') || 'fichier';
   const dir = path.join(HUB_DIR, 'attachments', uid());
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, name);
   fs.writeFileSync(file, req.body);
   res.json({ path: file, name, size: req.body.length });
+});
+
+app.get('/api/attachments/:id/:name', (req, res) => {
+  const dir = path.join(HUB_DIR, 'attachments');
+  const file = path.resolve(dir, path.basename(req.params.id), path.basename(req.params.name));
+  if (!file.startsWith(dir + path.sep) || !fs.existsSync(file)) return res.status(404).end();
+  res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'");
+  res.sendFile(file);
 });
 
 app.get('/api/workspaces/:id/events', (req, res) => {
@@ -886,7 +914,7 @@ function reportToOwner(wsId, what, text) {
   const ws = getWorkspace(wsId);
   if (!ws?.owner_agent || !getAgent(ws.owner_agent)) return;
   const msg = `[Supersept] La session « ${ws.name} » (id ${ws.id}) ${what}.${text ? ` Son dernier message : ${String(text).slice(0, 1500)}` : ''}`;
-  try { sendToAgent(ws.owner_agent, msg, { internal: true }); } catch {}
+  try { sendToAgent(ws.owner_agent, msg, { internal: true, conversation: ws.owner_conv ?? null }); } catch {}
 }
 
 // Claude Code hooks (called by curl from inside the agent, no Origin header).

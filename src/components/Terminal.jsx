@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
-import { wsUrl } from '../api.js';
+import { wsUrl, uploadFile } from '../api.js';
 
 // Superset's built-in "ember" dark theme.
 const THEME = {
@@ -122,6 +122,18 @@ export function sendInput(key, data) {
   pool.get(key)?.send({ type: 'input', data });
 }
 
+// Files dropped/pasted in a terminal are saved by the hub and typed in as paths: Claude Code turns
+// an image path into an attached image ([Image #1]). Nothing is submitted, the user finishes the prompt.
+export async function attachToTerminal(key, files) {
+  const list = [...(files || [])].slice(0, 8);
+  if (!list.length) return;
+  const paths = [];
+  for (const f of list) paths.push((await uploadFile(f)).path);
+  const quoted = paths.map((p) => (/[^\w./-]/.test(p) ? `'${p.replace(/'/g, "'\\''")}'` : p));
+  pool.get(key)?.send({ type: 'input', data: `\x1b[200~${quoted.join(' ')} \x1b[201~` });
+  pool.get(key)?.term.focus();
+}
+
 export function focusTerminal(key) {
   pool.get(key)?.term.focus();
 }
@@ -175,7 +187,31 @@ export default function Terminal({ termKey, active = true, keyboard = true }) {
     addEventListener('focus', doFit);
     document.addEventListener('visibilitychange', onVisible);
     host.addEventListener('focusin', doFit);
+    // Images pasted (⌘V) or files dropped on the terminal become attachments.
+    const onPaste = (e) => {
+      const files = [...(e.clipboardData?.files || [])];
+      if (!files.length) return;
+      e.preventDefault();
+      e.stopPropagation();
+      attachToTerminal(termKey, files).catch((err) => alert(err.message));
+    };
+    const onDragOver = (e) => { if (e.dataTransfer?.types.includes('Files')) { e.preventDefault(); host.classList.add('dropping'); } };
+    const onDragLeave = (e) => { if (!host.contains(e.relatedTarget)) host.classList.remove('dropping'); };
+    const onDrop = (e) => {
+      host.classList.remove('dropping');
+      if (!e.dataTransfer?.files.length) return;
+      e.preventDefault();
+      attachToTerminal(termKey, e.dataTransfer.files).catch((err) => alert(err.message));
+    };
+    host.addEventListener('paste', onPaste, true);
+    host.addEventListener('dragover', onDragOver);
+    host.addEventListener('dragleave', onDragLeave);
+    host.addEventListener('drop', onDrop);
     return () => {
+      host.removeEventListener('paste', onPaste, true);
+      host.removeEventListener('dragover', onDragOver);
+      host.removeEventListener('dragleave', onDragLeave);
+      host.removeEventListener('drop', onDrop);
       ro.disconnect();
       removeEventListener('focus', doFit);
       document.removeEventListener('visibilitychange', onVisible);

@@ -64,7 +64,7 @@ export default function App() {
       sock.onmessage = (e) => {
         const m = JSON.parse(e.data);
         if (m.type === 'reload') load();
-        if (m.type === 'chat' || m.type === 'chat-busy' || m.type === 'chat-reset') onChatEvent(m);
+        if (m.type === 'chat' || m.type === 'chat-busy' || m.type === 'chat-reset' || m.type === 'chat-convs') onChatEvent(m);
         if (m.type === 'workspace') {
           setData((d) => {
             const prev = d.workspaces.find((w) => w.id === m.workspace.id);
