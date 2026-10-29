@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { LuSearch, LuPlay, LuBrain } from 'react-icons/lu';
 import { api, ago } from '../api.js';
 import { ProjectThumbnail } from './ui.jsx';
+import { UsageSection } from './UsagePage.jsx';
 
 export function PageHeader({ title, children }) {
   return (
@@ -131,6 +132,7 @@ export function HistoryPage({ projects, go, routeId }) {
 
 export function SettingsPage({ me }) {
   const [perm, setPerm] = useState(() => ('Notification' in window ? Notification.permission : 'unsupported'));
+  const [tab, setTab] = useState('general');
   const rows = me ? [
     ['Serveur', `http://localhost:${me.port}`],
     ['Claude Code', me.claude],
@@ -140,7 +142,12 @@ export function SettingsPage({ me }) {
   return (
     <div className="page">
       <PageHeader title="Réglages" />
+      <div className="chips settings-tabs">
+        <button className={`chip ${tab === 'general' ? 'on' : ''}`} onClick={() => setTab('general')}>Général</button>
+        <button className={`chip ${tab === 'usage' ? 'on' : ''}`} onClick={() => setTab('usage')}>Utilisation</button>
+      </div>
       <div className="page-scroll">
+        {tab === 'usage' ? <div className="settings wide"><UsageSection /></div> : (
         <div className="settings">
           <section>
             <h2>Notifications</h2>
@@ -166,6 +173,7 @@ export function SettingsPage({ me }) {
             ))}
           </section>
         </div>
+        )}
       </div>
     </div>
   );

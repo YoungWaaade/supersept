@@ -15,6 +15,7 @@ import { sessions, spawn, spawnShell, killWorkspace, which, homedir, childEnv } 
 import { initChat, sendToAgent, chatHistory, isBusy, resetChat, stopTurn, conversations, resumeInterrupted, newConversation, updateConversation } from './chat.js';
 import * as remote from './remote.js';
 import * as relay from './relay.js';
+import * as usage from './usage.js';
 
 const PORT = Number(process.env.PORT || 4317);
 const HOST = '127.0.0.1';
@@ -918,6 +919,11 @@ app.post('/api/workspaces/:id/relay', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Token usage read from the transcripts, priced at the public API rates (see usage.js).
+app.get('/api/usage', wrap(async (req, res) => {
+  const range = ['7', '30', '90'].includes(req.query.range) ? Number(req.query.range) : 'all';
+  res.json(await usage.report({ range, refresh: req.query.refresh === '1' }));
+}));
 app.get('/api/relay', (req, res) => res.json({ ...relay.config(), learned: relay.learnedWindows() }));
 app.put('/api/relay', wrap(async (req, res) => res.json({ ...relay.setConfig(req.body || {}), learned: relay.learnedWindows() })));
 
@@ -1177,4 +1183,6 @@ server.listen(PORT, remote.listenHost(), () => {
     try { startAgent(id); console.log(`  reprise : ${name}`); }
     catch (e) { console.log(`  non repris (${name}) : ${e.message.split('\r')[0]}`); }
   }
+  // Read the transcripts in the background, so the Usage page opens without waiting for a first scan.
+  setTimeout(() => usage.scan().catch(() => {}), 10_000);
 });

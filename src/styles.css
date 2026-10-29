@@ -994,3 +994,49 @@ body.resizing { user-select: none; cursor: col-resize; }
 .toast { max-width: 360px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--popover, #221c1a); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); font-size: 12.5px; cursor: pointer; }
 .toast strong { display: block; margin-bottom: 2px; }
 .settings-row input[type='number'] { width: 90px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--background); font-size: 12.5px; text-align: right; }
+
+/* ---------- usage (settings) ---------- */
+.settings-tabs { padding: 10px 16px 0; }
+.settings.wide { max-width: 1080px; }
+.usage h2 { margin: 0; }
+.usage-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin: 18px 0 14px; }
+.usage-sub { margin: 4px 0 0; font-size: 12px; color: var(--muted-foreground); }
+.usage-controls { display: flex; align-items: center; gap: 8px; }
+.usage-hero { display: flex; gap: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.usage-total { width: 230px; flex: none; display: flex; flex-direction: column; gap: 4px; }
+.usage-total strong { font-size: 30px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; margin-bottom: 2px; }
+.usage-note { font-size: 12px; color: var(--muted-foreground); }
+.usage-note.warn { color: var(--yellow-500); }
+.usage-chart { flex: 1; min-width: 0; }
+.usage-chart svg { display: block; overflow: visible; }
+.usage-chart text { font-size: 10.5px; fill: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.usage-chart .usage-tip { fill: var(--foreground); font-size: 11px; }
+.usage-grid { stroke: var(--border); stroke-width: 1; }
+.usage-line { fill: none; stroke: var(--primary); stroke-width: 1.75; stroke-linejoin: round; }
+.usage-area { fill: rgba(224, 120, 80, 0.12); }
+.usage-point { fill: var(--primary); }
+.usage-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.usage-stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.usage-stat span { font-size: 12px; color: var(--muted-foreground); }
+.usage-stat strong { font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-tables { display: grid; grid-template-columns: 1fr 1.25fr; gap: 28px; padding-top: 14px; align-items: start; }
+.usage-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.usage-table th { font-size: 12px; font-weight: 500; color: var(--muted-foreground); text-align: right; padding: 0 0 8px 12px; height: 32px; border-bottom: 1px solid var(--border); }
+.usage-table th:first-child, .usage-table td:first-child { text-align: left; padding-left: 0; }
+.usage-table td { text-align: right; padding: 9px 0 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.usage-table tfoot td { border-bottom: 0; font-weight: 500; }
+.usage-dot { display: inline-block; width: 7px; height: 7px; border-radius: 2px; background: var(--primary); margin-right: 8px; vertical-align: 1px; }
+.usage-groups-head { display: flex; justify-content: space-between; align-items: center; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.usage-cols, .usage-row { display: grid; grid-template-columns: 1fr 80px 80px; gap: 12px; }
+.usage-cols { grid-template-columns: 80px 80px; font-size: 12px; color: var(--muted-foreground); text-align: right; }
+.usage-row { position: relative; align-items: center; padding: 9px 0 10px; border-bottom: 1px solid var(--border); text-align: right; }
+.usage-row .usage-name { text-align: left; overflow: hidden; white-space: nowrap; }
+.usage-row i { position: absolute; left: 0; bottom: 3px; height: 2px; border-radius: 1px; background: rgba(224, 120, 80, 0.55); }
+.usage-more { margin-top: 10px; }
+.usage-empty { font-size: 12px; padding: 10px 0; }
+.usage-foot { font-size: 12px; color: var(--muted-foreground); margin: 14px 0 0; }
+@media (max-width: 900px) {
+  .usage-hero { flex-direction: column; }
+  .usage-stats { grid-template-columns: repeat(2, 1fr); }
+  .usage-tables { grid-template-columns: 1fr; }
+}
