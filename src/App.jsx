@@ -42,6 +42,12 @@ export default function App() {
   const [renamingId, setRenamingId] = useState(null);
   const [connected, setConnected] = useState(false);
   const [rightOpen, setRightOpen] = useState(() => localStorage.getItem('rp-open') === '1');
+  const [toasts, setToasts] = useState([]);
+  const toast = useCallback((t) => {
+    const id = Math.random();
+    setToasts((l) => [...l, { ...t, id }]);
+    setTimeout(() => setToasts((l) => l.filter((x) => x.id !== id)), 8000);
+  }, []);
   const routeRef = useRef(route);
   routeRef.current = route;
 
@@ -65,6 +71,13 @@ export default function App() {
         const m = JSON.parse(e.data);
         if (m.type === 'reload') load();
         if (m.type === 'chat' || m.type === 'chat-busy' || m.type === 'chat-reset' || m.type === 'chat-convs') onChatEvent(m);
+        if (m.type === 'relay') {
+          const size = m.tokens && m.window ? ` (${Math.round(m.tokens / 1000)}k / ${Math.round(m.window / 1000)}k tokens)` : '';
+          if (m.kind === 'workspace') {
+            toast({ title: 'Session relayée', text: `« ${m.name} » avait un contexte plein${size} : elle continue dans une nouvelle session.`, route: { kind: 'ws', id: m.to } });
+            if (routeRef.current.kind === 'ws' && routeRef.current.id === m.from) location.hash = `#/ws/${m.to}`;
+          } else toast({ title: 'Session relayée', text: `Conversation de ${m.label} : contexte plein${size}, elle continue sur une nouvelle session.`, route: { kind: 'agent', id: m.agent } });
+        }
         if (m.type === 'workspace') {
           setData((d) => {
             const prev = d.workspaces.find((w) => w.id === m.workspace.id);
@@ -86,7 +99,17 @@ export default function App() {
   useEffect(() => { document.title = attention ? `(${attention}) Supersept` : 'Supersept'; }, [attention]);
 
   const go = (r) => { location.hash = r.id ? `#/${r.kind}/${r.id}` : `#/${r.kind}`; };
-  const current = route.kind === 'ws' ? data.workspaces.find((w) => w.id === route.id) : null;
+  // A relayed session (context full) opens the one that took over.
+  const follow = (id) => {
+    let w = data.workspaces.find((x) => x.id === id);
+    for (let i = 0; w?.successor && i < 50; i++) {
+      const next = data.workspaces.find((x) => x.id === w.successor);
+      if (!next) break;
+      w = next;
+    }
+    return w;
+  };
+  const current = route.kind === 'ws' ? follow(route.id) : null;
   const contextProject = current?.project_id || null;
   const newWorkspace = (projectId) => go({ kind: 'new', id: projectId === null ? 'none' : projectId ?? contextProject ?? undefined });
 
@@ -158,6 +181,15 @@ export default function App() {
       )}
       {modal?.type === 'search' && <CommandPalette data={data} projectsById={projectsById} go={go} onClose={() => setModal(null)} onNew={() => newWorkspace()} />}
       {projectMenu && <ProjectMenu {...projectMenu} go={go} onNew={newWorkspace} onLinkGitHub={(p) => setModal({ type: 'add-project', linkProject: p })} onClose={() => setProjectMenu(null)} />}
+      {!!toasts.length && (
+        <div className="toasts">
+          {toasts.map((t) => (
+            <div key={t.id} className="toast" onClick={() => { if (t.route) go(t.route); setToasts((l) => l.filter((x) => x.id !== t.id)); }}>
+              <strong>{t.title}</strong>{t.text}
+            </div>
+          ))}
+        </div>
+      )}
       {menu && <WorkspaceMenu {...menu} go={go} onFork={fork} onRename={(w) => setRenamingId(w.id)} onClose={() => setMenu(null)} />}
     </div>
   );

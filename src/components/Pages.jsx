@@ -151,6 +151,7 @@ export function SettingsPage({ me }) {
               )}
             </div>
           </section>
+          <ContextRelay />
           <RemoteAccess />
           <section>
             <h2>Emplacements</h2>
@@ -167,6 +168,36 @@ export function SettingsPage({ me }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// Automatic relay: past a share of the model's context window, a session hands over to a fresh one.
+function ContextRelay() {
+  const [cfg, setCfg] = useState(null);
+  useEffect(() => { api.get('/api/relay').then(setCfg).catch(() => {}); }, []);
+  const save = (patch) => api.put('/api/relay', patch).then(setCfg).catch((e) => alert(e.message));
+  if (!cfg) return null;
+  const learned = Object.entries(cfg.learned || {});
+  return (
+    <section>
+      <h2>Relais automatique (contexte plein)</h2>
+      <div className="settings-row">
+        <span>Quand une session a un contexte trop rempli, elle écrit un résumé de passation et une nouvelle session reprend le travail</span>
+        <button className="btn-ghost" onClick={() => save({ enabled: !cfg.enabled })}>{cfg.enabled ? 'Désactiver' : 'Activer'}</button>
+      </div>
+      <div className="settings-row">
+        <span>Seuil, en % de la fenêtre du modèle</span>
+        <input type="number" min="1" max="95" defaultValue={cfg.percent} key={`p${cfg.percent}`} onBlur={(e) => Number(e.target.value) !== cfg.percent && save({ percent: Number(e.target.value) })} />
+      </div>
+      <div className="settings-row">
+        <span>Plafond en tokens, quelle que soit la fenêtre (vide = aucun)</span>
+        <input type="number" min="0" step="1000" placeholder="aucun" defaultValue={cfg.maxTokens ?? ''} key={`m${cfg.maxTokens}`} onBlur={(e) => (Number(e.target.value) || null) !== cfg.maxTokens && save({ maxTokens: Number(e.target.value) || null })} />
+      </div>
+      <div className="settings-row">
+        <span>Fenêtres connues (apprises des agents ; 200k par défaut, 1M si le modèle finit par [1m])</span>
+        <code>{learned.length ? learned.map(([m, w]) => `${m} : ${w >= 1e6 ? `${w / 1e6}M` : `${Math.round(w / 1000)}k`}`).join(' · ') : 'aucune encore'}</code>
+      </div>
+    </section>
   );
 }
 

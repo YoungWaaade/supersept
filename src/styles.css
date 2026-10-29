@@ -986,3 +986,11 @@ body.resizing { user-select: none; cursor: col-resize; }
 .msg-images img { display: block; max-width: 220px; max-height: 180px; border-radius: 12px; object-fit: cover; box-shadow: inset 0 0 0 0.5px var(--border); }
 .chat-drop { position: absolute; inset: 8px; display: flex; align-items: center; justify-content: center; border: 1.5px dashed var(--primary); border-radius: 14px; background: rgba(21, 17, 16, 0.82); color: var(--foreground); font-size: 14px; pointer-events: none; z-index: 5; }
 .term-box.dropping { outline: 1.5px dashed var(--primary); outline-offset: -6px; border-radius: 10px; }
+
+/* Context gauge in the agent pane header, and the relay toast */
+.ctx-gauge { margin-left: 6px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); background: none; font-size: 10.5px; font-variant-numeric: tabular-nums; color: var(--muted-foreground); cursor: pointer; }
+.ctx-gauge.warn { color: #f6a04d; border-color: rgba(246, 160, 77, 0.4); }
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
+.toast { max-width: 360px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--popover, #221c1a); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); font-size: 12.5px; cursor: pointer; }
+.toast strong { display: block; margin-bottom: 2px; }
+.settings-row input[type='number'] { width: 90px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--background); font-size: 12.5px; text-align: right; }

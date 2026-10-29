@@ -26,6 +26,7 @@ const brief = (w, projects = []) => ({
   dossier: w.cwd,
   modifications: w.stats ? `+${w.stats.add} −${w.stats.del} (${w.stats.files} fichiers)` : null,
   lancee_par_toi: !!AGENT() && w.owner_agent === AGENT(),
+  contexte: w.context_tokens && w.context_window ? `${Math.round((100 * w.context_tokens) / w.context_window)} %` : null,
 });
 
 export async function listProjects() {
@@ -55,16 +56,19 @@ export async function listSessions({ project, mine }) {
   return s.workspaces.filter((w) => !w.archived && (!project || w.project_id === project) && (!mine || w.owner_agent === AGENT())).map((w) => brief(w, s.projects));
 }
 
+// Ids stay valid after an automatic relay (context full): the server follows to the session that took over.
 export async function getSession(id) {
-  const s = await call('GET', '/api/state');
-  const w = s.workspaces.find((x) => x.id === id);
-  if (!w) throw new Error('session introuvable');
-  const events = await call('GET', `/api/workspaces/${id}/events`);
-  return { ...brief(w, s.projects), activite: events.slice(0, 8).map((e) => ({ type: e.kind, texte: (e.text || '').slice(0, 400) })) };
+  const [s, w] = await Promise.all([call('GET', '/api/state'), call('GET', `/api/workspaces/${id}?follow=1`)]);
+  const events = await call('GET', `/api/workspaces/${w.id}/events`);
+  return {
+    ...brief(w, s.projects),
+    ...(w.id !== id ? { relayee: `l'id ${id} a été relayé vers ${w.id} (contexte plein), même dossier et même branche` } : {}),
+    activite: events.slice(0, 8).map((e) => ({ type: e.kind, texte: (e.text || '').slice(0, 400) })),
+  };
 }
 
 export const sendToSession = (id, message) => call('POST', `/api/workspaces/${id}/send`, { text: message });
-export async function archiveSession(id) { await call('PATCH', `/api/workspaces/${id}`, { archived: true }); return { id, statut: 'archivée' }; }
+export async function archiveSession(id) { const w = await call('PATCH', `/api/workspaces/${id}?follow=1`, { archived: true }); return { id: w.id, statut: 'archivée' }; }
 export const readMemory = async (project) => (await call('GET', `/api/projects/${project}/memory`)).content;
 export async function writeMemory(project, content) { await call('PUT', `/api/projects/${project}/memory`, { content }); return { projet: project, statut: 'mémoire mise à jour' }; }
 

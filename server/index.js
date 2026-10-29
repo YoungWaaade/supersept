@@ -7,13 +7,14 @@ import crypto from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { db, HUB_DIR, HOOKS_DIR, WORKTREES_DIR, MEMORY_DIR, memoryFile } from './db.js';
+import { db, HUB_DIR, HOOKS_DIR, WORKTREES_DIR, MEMORY_DIR, memoryFile, resolveWorkspaceId } from './db.js';
 import * as git from './git.js';
-import { listSessions, lastAssistantText } from './history.js';
+import { listSessions, lastAssistantText, recentAssistantTexts, firstPrompt } from './history.js';
 import { listAgents, getAgent, saveAgent, deleteAgent, isSlug, slugify } from './agents.js';
 import { sessions, spawn, spawnShell, killWorkspace, which, homedir, childEnv } from './pty.js';
 import { initChat, sendToAgent, chatHistory, isBusy, resetChat, stopTurn, conversations, resumeInterrupted, newConversation, updateConversation } from './chat.js';
 import * as remote from './remote.js';
+import * as relay from './relay.js';
 
 const PORT = Number(process.env.PORT || 4317);
 const HOST = '127.0.0.1';
@@ -100,7 +101,7 @@ function hookSettings(wsId) {
     command: `curl -s -m 3 -X POST -H 'Content-Type: application/json' --data-binary @- http://${HOST}:${PORT}/api/hook/${wsId}/${event} >/dev/null 2>&1 || true`,
   });
   const hooks = {};
-  for (const e of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Notification', 'Stop', 'SessionEnd']) {
+  for (const e of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Notification', 'Stop', 'SessionEnd', 'PreCompact']) {
     hooks[e] = [{ ...(e === 'PreToolUse' ? { matcher: '*' } : {}), hooks: [cmd(e)] }];
   }
   const file = path.join(HOOKS_DIR, `${wsId}.json`);
@@ -182,6 +183,8 @@ function startAgent(wsId) {
     env: { CLAUDE_HUB_WORKSPACE: ws.id },
     onExit: () => {
       if (!shuttingDown) db.prepare('UPDATE workspaces SET autostart = 0 WHERE id = ?').run(ws.id);
+      // Died while writing its handoff: build it from the transcript instead.
+      if (!shuttingDown && relaying.get(ws.id)?.phase === 'asking') finishRelay(ws.id, null, 'transcript');
       settle(ws.id);
       refreshStats(ws.id);
     },
@@ -207,7 +210,7 @@ function trustedByUser(dir) {
 // approved before. A brand-new session in an unknown folder still asks (that's when the check matters);
 // if an agent launched it, the agent tells the user.
 function trustIsKnown(ws, project) {
-  return real(ws.cwd) === real(homedir) || !!ws.has_conversation || trustedByUser(ws.cwd) || (project && trustedByUser(project.path));
+  return real(ws.cwd) === real(homedir) || !!ws.has_conversation || !!ws.predecessor || trustedByUser(ws.cwd) || (project && trustedByUser(project.path));
 }
 
 function watchTrustPrompt(s, ws, project) {
@@ -240,7 +243,8 @@ function startRun(wsId) {
 }
 
 // Claude Code stores a conversation once it has a first message: that's when to resume it.
-const transcriptExists = (cwd, sessionId) => fs.existsSync(path.join(homedir, '.claude', 'projects', real(cwd).replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`));
+const transcriptPath = (cwd, sessionId) => path.join(homedir, '.claude', 'projects', real(cwd).replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`);
+const transcriptExists = (cwd, sessionId) => fs.existsSync(transcriptPath(cwd, sessionId));
 
 // A secondary tab running a custom agent in the workspace folder, with its own conversation.
 function startAgentTab(wsId, tabId) {
@@ -644,7 +648,7 @@ app.post('/api/workspaces', wrap(async (req, res) => {
 }));
 
 app.patch('/api/workspaces/:id', wrap(async (req, res) => {
-  const ws = getWorkspace(req.params.id);
+  const ws = getWorkspace(req.query.follow === '1' ? resolveWorkspaceId(req.params.id) : req.params.id);
   if (!ws) throw new Error('workspace introuvable');
   const status = req.body.status && ['idle', 'review', 'done'].includes(req.body.status) ? req.body.status : null;
   const base = typeof req.body.base_branch === 'string' && /^[\w./-]+$/.test(req.body.base_branch) ? req.body.base_branch : ws.base_branch;
@@ -782,19 +786,15 @@ app.post('/api/agents/:slug/chat/stop', (req, res) => { stopTurn(req.params.slug
 app.post('/api/agents/:slug/chat/reset', (req, res) => res.json({ conversation: resetChat(req.params.slug) }));
 
 // Type a message into a session's Claude (used by chat agents to answer or follow up).
-app.post('/api/workspaces/:id/send', wrap(async (req, res) => {
-  const ws = getWorkspace(req.params.id);
-  if (!ws) throw new Error('session introuvable');
-  const text = String(req.body.text || '').trim();
-  if (!text) throw new Error('message vide');
-  let s = sessions.get(`${ws.id}:agent`);
+// Paste the text (bracketed paste, so Claude Code treats it as one block), then press Enter
+// separately: sent in the same burst, the Enter would be swallowed by the paste and never submit.
+// A freshly (re)started Claude needs a few seconds before it accepts input.
+// Claude Code refuses to send invisible characters (French non-breaking spaces before « : », zero-width
+// chars…) and asks to "review and press Enter": normalise them, and confirm if it still asks.
+function typeInto(wsId, text) {
+  let s = sessions.get(`${wsId}:agent`);
   const fresh = !s?.alive;
-  if (fresh) s = startAgent(ws.id);
-  // Paste the text (bracketed paste, so Claude Code treats it as one block), then press Enter
-  // separately: sent in the same burst, the Enter would be swallowed by the paste and never submit.
-  // A freshly (re)started Claude needs a few seconds before it accepts input.
-  // Claude Code refuses to send invisible characters (French non-breaking spaces before « : », zero-width
-  // chars…) and asks to "review and press Enter": normalise them, and confirm if it still asks.
+  if (fresh) s = startAgent(wsId);
   const clean = text.replace(/\r?\n/g, ' ').replace(/[\u00a0\u202f\u2007\u2009\u200a]/g, ' ').replace(/[\u200b-\u200d\u2060\ufeff]/g, '');
   setTimeout(() => {
     s.write(`\x1b[200~${clean}\x1b[201~`);
@@ -806,8 +806,25 @@ app.post('/api/workspaces/:id/send', wrap(async (req, res) => {
       }, 1200);
     }, 400);
   }, fresh ? 6000 : 50);
+  return fresh;
+}
+
+// Old ids keep working after a relay: messages go to the session that took over.
+app.post('/api/workspaces/:id/send', wrap(async (req, res) => {
+  const ws = getWorkspace(resolveWorkspaceId(req.params.id));
+  if (!ws) throw new Error('session introuvable');
+  const text = String(req.body.text || '').trim();
+  if (!text) throw new Error('message vide');
+  const r = relaying.get(ws.id);
+  if (r) {
+    // Mid-relay: the old session is writing its handoff, the message goes to the new one.
+    r.pending.push(text);
+    logEvent(ws.id, 'prompt', text);
+    return res.json({ ok: true, relais: 'en cours : le message sera remis à la nouvelle session' });
+  }
+  const fresh = typeInto(ws.id, text);
   logEvent(ws.id, 'prompt', text);
-  res.json({ ok: true, demarree: fresh });
+  res.json({ ok: true, demarree: fresh, ...(ws.id !== req.params.id ? { relayee_vers: ws.id } : {}) });
 }));
 
 app.put('/api/agents/:slug', wrap(async (req, res) => {
@@ -883,8 +900,26 @@ app.get('/api/attachments/:id/:name', (req, res) => {
 });
 
 app.get('/api/workspaces/:id/events', (req, res) => {
-  res.json(db.prepare('SELECT * FROM events WHERE workspace_id = ? ORDER BY at DESC LIMIT 100').all(req.params.id));
+  const id = req.query.follow === '1' ? resolveWorkspaceId(req.params.id) : req.params.id;
+  res.json(db.prepare('SELECT * FROM events WHERE workspace_id = ? ORDER BY at DESC LIMIT 100').all(id));
 });
+
+// One session, following relays when ?follow=1 (agents keep the id they were given).
+app.get('/api/workspaces/:id', wrap(async (req, res) => {
+  const ws = getWorkspace(req.query.follow === '1' ? resolveWorkspaceId(req.params.id) : req.params.id);
+  if (!ws) throw new Error('session introuvable');
+  res.json(decorate(ws));
+}));
+
+app.post('/api/workspaces/:id/relay', wrap(async (req, res) => {
+  const ws = getWorkspace(req.params.id);
+  if (!ws) throw new Error('session introuvable');
+  if (!beginRelay(ws.id, { reason: 'manuel', force: true })) throw new Error('relais impossible : session arrêtée, archivée ou déjà relayée');
+  res.json({ ok: true });
+}));
+
+app.get('/api/relay', (req, res) => res.json({ ...relay.config(), learned: relay.learnedWindows() }));
+app.put('/api/relay', wrap(async (req, res) => res.json({ ...relay.setConfig(req.body || {}), learned: relay.learnedWindows() })));
 
 const OPENERS = {
   vscode: ['open', ['-a', 'Visual Studio Code']],
@@ -912,9 +947,92 @@ app.post('/api/workspaces/:id/open', wrap(async (req, res) => {
 // Tell the chat agent that launched a session what happened, so it can follow up on its own.
 function reportToOwner(wsId, what, text) {
   const ws = getWorkspace(wsId);
-  if (!ws?.owner_agent || !getAgent(ws.owner_agent)) return;
+  if (!ws?.owner_agent || !getAgent(ws.owner_agent) || ws.successor || relaying.has(wsId)) return;
   const msg = `[Supersept] La session « ${ws.name} » (id ${ws.id}) ${what}.${text ? ` Son dernier message : ${String(text).slice(0, 1500)}` : ''}`;
   try { sendToAgent(ws.owner_agent, msg, { internal: true, conversation: ws.owner_conv ?? null }); } catch {}
+}
+
+// ---------- automatic relay (context full) ----------
+const relaying = new Map(); // workspace id → { phase, timer, pending, tokens, window, reason, transcript }
+const compactPending = new Set();
+const HANDOFF_TIMEOUT = Number(process.env.SUPERSEPT_HANDOFF_TIMEOUT_MS) || 4 * 60 * 1000;
+
+function measureWorkspace(id, transcript) {
+  const ws = getWorkspace(id);
+  const u = relay.transcriptUsage(transcript || transcriptPath(ws.cwd, ws.session_id));
+  const m = u && relay.measure({ tokens: u.tokens, model: u.model, requested: ws.model });
+  if (m) db.prepare('UPDATE workspaces SET context_tokens = ?, context_window = ? WHERE id = ?').run(m.tokens, m.window, id);
+  return m;
+}
+
+// Step 1: at the end of a turn, ask the old session for a handoff summary (its next Stop carries it).
+function beginRelay(id, { reason, force = false } = {}) {
+  const ws = getWorkspace(id);
+  if (!ws || ws.archived || ws.successor || relaying.has(id) || !sessions.get(`${id}:agent`)?.alive) return false;
+  if (!force && !relay.config().enabled) return false;
+  compactPending.delete(id);
+  const r = { phase: 'asking', pending: [], reason, tokens: ws.context_tokens, window: ws.context_window, transcript: transcriptPath(ws.cwd, ws.session_id) };
+  r.timer = setTimeout(() => finishRelay(id, null, 'transcript'), HANDOFF_TIMEOUT);
+  relaying.set(id, r);
+  logEvent(id, 'relay', `Contexte plein (${ws.context_tokens ?? '?'} / ${ws.context_window ?? '?'} tokens, ${reason}) : demande du résumé de passation`);
+  setStatus(id, 'working', 'Relais : écrit son résumé de passation');
+  typeInto(id, relay.HANDOFF_REQUEST);
+  return true;
+}
+
+// Without an answer from the session: mission + its last messages, straight from the transcript.
+function transcriptHandoff(ws, transcript) {
+  const last = recentAssistantTexts(transcript, 3);
+  return [
+    '## Mission', relay.stripIntro(ws.initial_prompt) || firstPrompt(transcript) || '(inconnue)', '',
+    '## Derniers messages de la session précédente', ...(last.length ? last.map((t) => `> ${t.slice(0, 3000).replace(/\n/g, '\n> ')}`) : ['(aucun)']), '',
+    '## Repères', `- Dossier : ${ws.cwd}`, ws.branch ? `- Branche : ${ws.branch}${ws.base_branch ? ` (base ${ws.base_branch})` : ''}` : null,
+  ].filter((l) => l !== null).join('\n');
+}
+
+// Step 2: new session in the same folder/branch/agent, started from the summary; the old one is archived.
+function finishRelay(id, summary, source) {
+  const r = relaying.get(id);
+  const ws = getWorkspace(id);
+  if (!r || r.phase !== 'asking' || !ws) return;
+  r.phase = 'creating';
+  clearTimeout(r.timer);
+  // A too short answer is not a handoff (e.g. the session refused or got cut).
+  if (!summary || summary.trim().length < 80) { summary = transcriptHandoff(ws, r.transcript); source = 'transcript'; }
+  const intro = [
+    relay.handoffIntro(summary, `la session « ${ws.name} »`, source === 'session'),
+    `\n\nTranscript complet de la session précédente, si un détail manque : ${r.transcript}`,
+    r.pending.length ? `\n\nMessages reçus pendant le relais, à traiter :\n${r.pending.map((t) => `- ${t}`).join('\n')}` : '',
+  ].join('');
+  const newId = uid();
+  const sessionId = crypto.randomUUID();
+  db.exec('BEGIN');
+  try {
+    db.prepare(`INSERT INTO workspaces (id, project_id, name, cwd, branch, base_branch, is_worktree, session_id, has_conversation, initial_prompt, status, status_since,
+                created_at, updated_at, model, effort, permission_mode, agent, owner_agent, owner_conv, predecessor)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(newId, ws.project_id, ws.name, ws.cwd, ws.branch, ws.base_branch, ws.is_worktree, sessionId, intro, now(), now(), now(),
+        ws.model, ws.effort, ws.permission_mode, ws.agent, ws.owner_agent, ws.owner_conv, ws.id);
+    db.prepare('UPDATE workspaces SET successor = ?, archived = 1, autostart = 0, updated_at = ? WHERE id = ?').run(newId, now(), ws.id);
+    db.prepare('UPDATE agent_tabs SET workspace_id = ? WHERE workspace_id = ?').run(newId, ws.id);
+    db.prepare('INSERT INTO relays (kind, from_ref, to_ref, old_session, new_session, tokens, window, summary_source, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run('workspace', ws.id, newId, ws.session_id, sessionId, r.tokens, r.window, source, now());
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    relaying.delete(id);
+    logEvent(id, 'relay', `Relais impossible : ${e.message}`);
+    return;
+  }
+  relaying.delete(id);
+  killWorkspace(ws.id);
+  logEvent(ws.id, 'relay', `Relayée vers la session ${newId} (résumé : ${source})`);
+  logEvent(newId, 'created', ws.name);
+  logEvent(newId, 'relay', `Reprend la session ${ws.id}, dont le contexte était plein`);
+  try { startAgent(newId); } catch (e) { logEvent(newId, 'relay', `Démarrage impossible : ${e.message}`); }
+  refreshStats(newId);
+  broadcast({ type: 'reload' });
+  broadcast({ type: 'relay', kind: 'workspace', from: ws.id, to: newId, name: ws.name, tokens: r.tokens, window: r.window });
 }
 
 // Claude Code hooks (called by curl from inside the agent, no Origin header).
@@ -947,17 +1065,28 @@ app.post('/api/hook/:id/:event', (req, res) => {
     }
     case 'Stop': {
       const text = body.last_assistant_message || (body.transcript_path && lastAssistantText(body.transcript_path)) || null;
+      if (relaying.get(id)?.phase === 'asking') { finishRelay(id, text, 'session'); break; }
+      const m = measureWorkspace(id, body.transcript_path);
       logEvent(id, 'stop', text?.slice(0, 4000));
       setStatus(id, 'review', text?.slice(0, 600) ?? null);
       refreshStats(id);
       reportToOwner(id, 'vient de terminer', text);
+      // A session that just took over doesn't relay on its first turn (the handoff alone may be above a low threshold).
+      const firstTurn = ws.predecessor && db.prepare("SELECT COUNT(*) AS n FROM events WHERE workspace_id = ? AND kind = 'stop'").get(id).n < 2;
+      if ((m?.over || compactPending.has(id)) && !firstTurn) beginRelay(id, { reason: m?.over ? 'seuil' : 'auto-compact' });
       break;
     }
+    case 'PreCompact':
+      // Auto-compact means the context is full; relay at the end of the turn (never in the middle).
+      if (body.trigger !== 'manual') { compactPending.add(id); logEvent(id, 'compact', 'Contexte plein : compaction automatique, relais à la fin du tour'); }
+      break;
     case 'SessionStart':
       pushWorkspace(id);
       break;
     case 'SessionEnd':
       settle(id);
+      // The old session died before writing its handoff: build it from the transcript.
+      if (relaying.get(id)?.phase === 'asking') finishRelay(id, null, 'transcript');
       break;
   }
 });

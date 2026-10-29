@@ -93,3 +93,31 @@ export function lastAssistantText(transcriptPath) {
   } catch {}
   return null;
 }
+
+// Last few assistant texts of a transcript (newest last), for a handoff built without asking Claude.
+export function recentAssistantTexts(transcriptPath, n = 3) {
+  const out = [];
+  try {
+    const st = fs.statSync(transcriptPath);
+    const size = Math.min(st.size, 2 * 1024 * 1024);
+    const fd = fs.openSync(transcriptPath, 'r');
+    const buf = Buffer.alloc(size);
+    fs.readSync(fd, buf, 0, size, st.size - size);
+    fs.closeSync(fd);
+    for (const line of buf.toString().split('\n').reverse()) {
+      if (out.length >= n) break;
+      if (!line.includes('"assistant"')) continue;
+      try {
+        const o = JSON.parse(line);
+        if (o.type !== 'assistant' || o.isSidechain) continue;
+        const t = textOf(o.message?.content).trim();
+        if (t) out.unshift(t);
+      } catch {}
+    }
+  } catch {}
+  return out;
+}
+
+export function firstPrompt(transcriptPath) {
+  try { return parse(transcriptPath).firstPrompt; } catch { return null; }
+}

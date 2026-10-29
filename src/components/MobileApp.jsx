@@ -26,7 +26,9 @@ function useVisualViewport() {
 
 export default function MobileApp({ data, projectsById, route, go, connected, load }) {
   const vv = useVisualViewport();
-  const current = route.kind === 'ws' ? data.workspaces.find((w) => w.id === route.id) : null;
+  // A relayed session (context full) opens the one that took over.
+  let current = route.kind === 'ws' ? data.workspaces.find((w) => w.id === route.id) : null;
+  for (let i = 0; current?.successor && i < 50; i++) current = data.workspaces.find((w) => w.id === current.successor) || null;
   let screen;
   if (current) screen = <WorkspaceScreen key={current.id} ws={current} project={projectsById[current.project_id]} go={go} />;
   else if (route.kind === 'new') screen = <NewScreen projects={data.projects} go={go} load={load} />;

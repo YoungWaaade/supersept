@@ -300,6 +300,7 @@ function Pane({ ws, pane, termKey, visible, split, focused, onFocus, onSplit, on
               </button>
             )}
             {isAgent && <StatusIndicator status={ws.status} />}
+            {isAgent && <ContextGauge ws={ws} />}
           </div>
           <div className="pane-actions">
             {isAgent && (
@@ -321,6 +322,21 @@ function Pane({ ws, pane, termKey, visible, split, focused, onFocus, onSplit, on
         </div>
       </div>
     </div>
+  );
+}
+
+// How full the conversation's context was at the end of the last turn; a click relays it right away.
+function ContextGauge({ ws }) {
+  if (!ws.context_tokens || !ws.context_window || ws.archived) return null;
+  const pct = Math.round((100 * ws.context_tokens) / ws.context_window);
+  const k = (n) => `${Math.round(n / 1000)}k`;
+  const relayNow = () => confirm('Relayer cette session vers une nouvelle, à partir d\'un résumé de passation ?')
+    && api.post(`/api/workspaces/${ws.id}/relay`).catch((e) => alert(e.message));
+  return (
+    <button className={`ctx-gauge ${pct >= 60 ? 'warn' : ''}`} onClick={relayNow}
+      title={`Contexte : ${k(ws.context_tokens)} / ${k(ws.context_window)} tokens. Relais automatique au seuil réglé dans les Réglages. Clic : relayer maintenant.`}>
+      {pct} %
+    </button>
   );
 }
 

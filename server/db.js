@@ -178,3 +178,36 @@ db.exec(`CREATE TABLE IF NOT EXISTS agent_tabs (
 )`);
 
 export const memoryFile = (projectId) => path.join(MEMORY_DIR, `${projectId}.md`);
+// Automatic relay when a context gets full (see relay.js): the session that took over, and the last measure.
+addColumn('workspaces', 'successor', 'TEXT');
+addColumn('workspaces', 'predecessor', 'TEXT');
+addColumn('workspaces', 'context_tokens', 'INTEGER');
+addColumn('workspaces', 'context_window', 'INTEGER');
+addColumn('agent_convs', 'context_tokens', 'INTEGER');
+addColumn('agent_convs', 'context_window', 'INTEGER');
+// Handoff summary given to the conversation's next Claude session (chats keep their number across relays).
+addColumn('agent_convs', 'handoff', 'TEXT');
+db.exec(`CREATE TABLE IF NOT EXISTS relays (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  from_ref TEXT NOT NULL,
+  to_ref TEXT NOT NULL,
+  old_session TEXT,
+  new_session TEXT,
+  tokens INTEGER,
+  window INTEGER,
+  summary_source TEXT,
+  at INTEGER NOT NULL
+)`);
+
+// Follow workspace relays to the session doing the work now.
+export function resolveWorkspaceId(id) {
+  const seen = new Set();
+  let cur = id;
+  for (;;) {
+    const next = db.prepare('SELECT successor FROM workspaces WHERE id = ?').get(cur)?.successor;
+    if (!next || seen.has(next)) return cur;
+    seen.add(cur);
+    cur = next;
+  }
+}

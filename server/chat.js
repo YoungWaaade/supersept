@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { db, HUB_DIR } from './db.js';
 import { getAgent, listAgents } from './agents.js';
+import * as relay from './relay.js';
 
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cli.mjs');
 // Each conversation runs on its own, so several can work in parallel. Keyed by "agent:conversation".
@@ -228,13 +229,67 @@ export function sendToAgent(agent, text, { internal = false, from = null, fromCo
   if (!st.open) ctx.broadcast({ type: 'chat-convs', agent });
   if (sender) text = `[Message de ${sender.label}, qui coordonne l'équipe] ${text}`;
   if (images.length) text += `\n\n[Images jointes, regarde-les avec l'outil Read : ${images.map((i) => i.path).join(' , ')}]`;
-  if (!st.started) text = recap(agent, conv) + text;
+  if (!st.started && !st.handoff) text = recap(agent, conv) + text;
   const k = key(agent, conv);
   const q = queues.get(k) || [];
   q.push(text);
   queues.set(k, q);
   if (!running.has(k)) runNext(agent, conv);
   return conv;
+}
+
+// One headless Claude Code turn on the conversation's session.
+function spawnTurn(a, agent, conv, st, text, format) {
+  const { dir, bin } = agentHome(agent);
+  const args = ['-p', '--output-format', format, ...(format === 'stream-json' ? ['--verbose'] : []),
+    '--allowedTools', 'Bash(supersept:*)', 'mcp__figma', 'WebSearch', 'WebFetch', 'Read', 'Glob', 'Grep',
+    '--disallowedTools', 'Edit', 'Write', 'NotebookEdit',
+    '--add-dir', path.join(HUB_DIR, 'attachments'),
+    '--append-system-prompt', systemPrompt(a)];
+  if (a.model) args.push('--model', a.model);
+  if (a.effort) args.push('--effort', a.effort);
+  args.push(...(st.started ? ['--resume', st.session_id] : ['--session-id', st.session_id]));
+  args.push(text);
+  const env = ctx.env();
+  env.PATH = `${bin}:${env.PATH}`;
+  env.SUPERSEPT_URL = `http://127.0.0.1:${ctx.port}`;
+  env.SUPERSEPT_AGENT = agent;
+  env.SUPERSEPT_CONV = String(conv);
+  fs.mkdirSync(path.join(HUB_DIR, 'attachments'), { recursive: true });
+  return spawn(ctx.claude, args, { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+// Context full: the conversation keeps its number (so managers, sessions it launched and the chat UI don't
+// notice), but continues on a new Claude session that starts from a handoff summary. The summary is asked
+// to the old session in a hidden turn; queued messages wait meanwhile.
+function relayConv(agent, conv, m, reason) {
+  const k = key(agent, conv);
+  const a = getAgent(agent);
+  const st = getConv(agent, conv);
+  const child = spawnTurn(a, agent, conv, st, relay.HANDOFF_REQUEST, 'json');
+  running.set(k, child);
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; });
+  child.on('close', () => {
+    running.delete(k);
+    let summary = null;
+    try { summary = JSON.parse(out).result; } catch {}
+    let source = 'session';
+    if (!summary || String(summary).trim().length < 80) {
+      // No usable answer: the chat's own messages are the best record left.
+      summary = recap(agent, conv).replace(/\n\nNouveau message :\n$/, '') || '(pas de résumé disponible)';
+      source = 'messages';
+    }
+    const sessionId = crypto.randomUUID();
+    db.prepare('UPDATE agent_convs SET session_id = ?, started = 0, handoff = ?, context_tokens = NULL, updated_at = ? WHERE agent = ? AND conversation = ?')
+      .run(sessionId, relay.handoffIntro(String(summary), 'cette conversation', source === 'session'), now(), agent, conv);
+    db.prepare('INSERT INTO relays (kind, from_ref, to_ref, old_session, new_session, tokens, window, summary_source, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run('chat', k, k, st.session_id, sessionId, m?.tokens ?? null, m?.window ?? null, source, now());
+    addMessage(agent, conv, 'system', `Session relayée : contexte plein (${m ? `${Math.round(m.tokens / 1000)}k / ${Math.round(m.window / 1000)}k tokens` : reason}), la conversation continue sur une nouvelle session à partir d'un résumé.`, { relay: true });
+    ctx.broadcast({ type: 'relay', kind: 'chat', agent, conversation: conv, label: a.label, tokens: m?.tokens, window: m?.window });
+    ctx.broadcast({ type: 'chat-busy', agent, conversation: conv, busy: false });
+    runNext(agent, conv);
+  });
 }
 
 function runNext(agent, conv) {
@@ -245,24 +300,10 @@ function runNext(agent, conv) {
   const a = getAgent(agent);
   if (!a) return;
   const st = getConv(agent, conv);
-  const { dir, bin } = agentHome(agent);
-  const args = ['-p', '--output-format', 'stream-json', '--verbose',
-    '--allowedTools', 'Bash(supersept:*)', 'mcp__figma', 'WebSearch', 'WebFetch', 'Read', 'Glob', 'Grep',
-    '--disallowedTools', 'Edit', 'Write', 'NotebookEdit',
-    '--add-dir', path.join(HUB_DIR, 'attachments'),
-    '--append-system-prompt', systemPrompt(a)];
-  if (a.model) args.push('--model', a.model);
-  if (a.effort) args.push('--effort', a.effort);
-  args.push(...(st.started ? ['--resume', st.session_id] : ['--session-id', st.session_id]));
-  args.push(text);
-
-  const env = ctx.env();
-  env.PATH = `${bin}:${env.PATH}`;
-  env.SUPERSEPT_URL = `http://127.0.0.1:${ctx.port}`;
-  env.SUPERSEPT_AGENT = agent;
-  env.SUPERSEPT_CONV = String(conv);
-  fs.mkdirSync(path.join(HUB_DIR, 'attachments'), { recursive: true });
-  const child = spawn(ctx.claude, args, { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  // First turn after a relay: the new Claude session starts from the handoff summary.
+  const firstAfterRelay = !st.started && !!st.handoff;
+  const prompt = firstAfterRelay ? `${st.handoff}\n\nNouveau message :\n${text}` : text;
+  const child = spawnTurn(a, agent, conv, st, prompt, 'stream-json');
   running.set(k, child);
   db.prepare('UPDATE agent_convs SET running = 1, started = 1 WHERE agent = ? AND conversation = ?').run(agent, conv);
   ctx.broadcast({ type: 'chat-busy', agent, conversation: conv, busy: true });
@@ -271,6 +312,8 @@ function runNext(agent, conv) {
   let reply = null;
   let buf = '';
   let errText = '';
+  let usage = null; // last main-chain call of the turn → context size
+  let compacted = false;
   child.stdout.on('data', (d) => {
     buf += d;
     let i;
@@ -279,6 +322,13 @@ function runNext(agent, conv) {
       buf = buf.slice(i + 1);
       let ev;
       try { ev = JSON.parse(line); } catch { continue; }
+      if (ev.type === 'assistant' && !ev.parent_tool_use_id && ev.message?.usage) usage = { tokens: relay.contextOf(ev.message.usage), model: ev.message.model };
+      if (ev.type === 'system' && ev.subtype === 'compact_boundary') compacted = true;
+      if (ev.type === 'result' && ev.modelUsage) {
+        for (const [m, u] of Object.entries(ev.modelUsage)) relay.learnWindow(m, u.contextWindow);
+        const main = usage && Object.entries(ev.modelUsage).find(([m]) => m.endsWith(String(usage.model).replace(/\[.*$/, '')));
+        if (main && usage) usage.window = main[1].contextWindow;
+      }
       if (ev.type === 'assistant') {
         for (const c of ev.message?.content || []) {
           if (c.type === 'text' && c.text.trim()) {
@@ -318,6 +368,10 @@ function runNext(agent, conv) {
     }
     for (const m of tools.values()) if (m.meta.status === 'running') updateMessage(m, { meta: { ...m.meta, status: code ? 'error' : 'done' } });
     if (code && !reply && code !== 143 && code !== null) addMessage(agent, conv, 'error', `Je n'ai pas pu répondre (${String(errText).trim().split('\n').pop()?.slice(0, 200) || `code ${code}`}).`);
+    const m = usage && relay.measure(usage);
+    if (m) db.prepare('UPDATE agent_convs SET context_tokens = ?, context_window = ? WHERE agent = ? AND conversation = ?').run(m.tokens, m.window, agent, conv);
+    // Checked once the turn is over, never in the middle of one.
+    if (!shuttingDown && code === 0 && !firstAfterRelay && (m?.over || (compacted && relay.config().enabled))) return relayConv(agent, conv, m, 'auto-compact');
     ctx.broadcast({ type: 'chat-busy', agent, conversation: conv, busy: false });
     runNext(agent, conv);
   });
