@@ -190,7 +190,7 @@ function ContextRelay() {
         <input type="number" min="1" max="95" defaultValue={cfg.percent} key={`p${cfg.percent}`} onBlur={(e) => Number(e.target.value) !== cfg.percent && save({ percent: Number(e.target.value) })} />
       </div>
       <div className="settings-row">
-        <span>Plafond en tokens, quelle que soit la fenêtre (vide = aucun)</span>
+        <span>Plafond en tokens, quelle que soit la fenêtre (200k par défaut, vide = aucun)</span>
         <input type="number" min="0" step="1000" placeholder="aucun" defaultValue={cfg.maxTokens ?? ''} key={`m${cfg.maxTokens}`} onBlur={(e) => (Number(e.target.value) || null) !== cfg.maxTokens && save({ maxTokens: Number(e.target.value) || null })} />
       </div>
       <div className="settings-row">

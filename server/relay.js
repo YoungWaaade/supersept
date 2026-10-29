@@ -11,13 +11,14 @@ import { HUB_DIR } from './db.js';
 
 const CONFIG = path.join(HUB_DIR, 'relay.json');
 const WINDOWS = path.join(HUB_DIR, 'context-windows.json');
-const DEFAULTS = { enabled: true, percent: 75, maxTokens: null, windows: {} };
+// 200k cap by default: on 1M windows, 75 % (750k) is far too late, sessions misbehave well before.
+const DEFAULTS = { enabled: true, percent: 75, maxTokens: 200_000, windows: {} };
 const DEFAULT_WINDOW = 200_000;
 const LARGE_WINDOW = 1_000_000;
 
 const readJson = (f, fallback) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return fallback; } };
 
-// percent: share of the model window; maxTokens: optional absolute cap (whichever comes first);
+// percent: share of the model window; maxTokens: absolute cap, null to remove it (whichever comes first);
 // windows: manual overrides, model id → window size.
 export function config() {
   const c = { ...DEFAULTS, ...readJson(CONFIG, {}) };
