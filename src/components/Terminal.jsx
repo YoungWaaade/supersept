@@ -66,18 +66,46 @@ function create(key) {
     return true;
   });
 
+  // Shown or resized, Claude Code clears the screen and reprints the whole conversation, which would
+  // scroll by visibly for a few frames. In the moment after that, a redraw is held back (the old
+  // content stays on screen) until the output goes quiet, then written at once while hidden.
+  const hidden = (data) => {
+    el.style.visibility = 'hidden';
+    term.write(data, () => { term.scrollToBottom(); el.style.visibility = ''; });
+  };
+  let hold = null;
+  const flush = () => {
+    clearTimeout(hold.quiet);
+    clearTimeout(hold.cap);
+    const data = hold.chunks.join('');
+    hold = null;
+    hidden(data);
+  };
+  entry.settle = (ms = 1000) => { entry.settleUntil = performance.now() + ms; };
+  const output = (data) => {
+    if (!hold && performance.now() < (entry.settleUntil || 0) && (/\x1b\[[23]J/.test(data) || data.length > 32768)) {
+      hold = { chunks: [], cap: setTimeout(flush, 2000) };
+    }
+    if (!hold) return term.write(data);
+    hold.chunks.push(data);
+    clearTimeout(hold.quiet);
+    hold.quiet = setTimeout(flush, 150);
+  };
+
   const connect = () => {
     const sock = new WebSocket(wsUrl(`/ws/term?key=${encodeURIComponent(key)}`));
     entry.sock = sock;
     sock.onmessage = (ev) => {
       const m = JSON.parse(ev.data);
-      if (m.type === 'output') term.write(m.data);
+      if (m.type === 'output') output(m.data);
       else if (m.type === 'reset') {
+        if (hold) { clearTimeout(hold.quiet); clearTimeout(hold.cap); hold = null; }
         term.reset();
-        term.write(m.data);
+        hidden(m.data);
         entry.alive = m.alive;
         // Nudge the TUI into a full redraw at our real size.
         const { cols, rows } = term;
+        entry.settle();
         send({ type: 'resize', cols: Math.max(2, cols - 1), rows });
         setTimeout(() => send({ type: 'resize', cols, rows }), 60);
       } else if (m.type === 'exit') {
@@ -171,10 +199,13 @@ export default function Terminal({ termKey, active = true, keyboard = true }) {
       entry.connect();
     }
     if (!keyboard) entry.term.textarea?.setAttribute('inputmode', 'none');
+    entry.settle();
     const doFit = () => {
       if (!box.current?.offsetWidth) return;
       try {
+        const { cols, rows } = entry.term;
         entry.fit.fit();
+        if (entry.term.cols !== cols || entry.term.rows !== rows) entry.settle();
         entry.send({ type: 'resize', cols: entry.term.cols, rows: entry.term.rows });
       } catch {}
     };

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { LuArrowUp, LuSquare, LuSettings2, LuFolder, LuFolderPlus, LuPlay, LuLayers, LuEye, LuSend, LuArchive, LuBrain, LuSearch, LuGlobe, LuWrench, LuCheck, LuX, LuLoaderCircle, LuMegaphone, LuUsers, LuBot, LuHistory, LuChevronDown, LuPlus, LuMessageSquare, LuImagePlus, LuImage } from 'react-icons/lu';
 import { api, ago, uploadFile, attachmentUrl, imageFiles } from '../api.js';
 import { useChat, useConvs, loadConvs, setViewing, useChatBadges } from '../chatStore.js';
@@ -50,6 +50,8 @@ function systemLabel(text) {
 
 const convTitle = (c) => c.title || (c.first ? c.first.replace(/\s+/g, ' ').slice(0, 60) : 'Nouvelle conversation');
 const lastKey = (slug) => `supersept.conv.${slug}`;
+// Where the user left a conversation they had scrolled up in (absent = stuck to the bottom).
+const scrollPos = new Map();
 
 export default function AgentChat({ agent, go }) {
   const { list, loaded } = useConvs(agent.slug);
@@ -87,7 +89,47 @@ export default function AgentChat({ agent, go }) {
     input.current?.focus();
   }, [agent.slug, active]);
   useEffect(() => () => setViewing(null), []);
-  useEffect(() => { list_.current?.scrollTo({ top: list_.current.scrollHeight, behavior: 'smooth' }); }, [chat?.messages.length, chat?.busy, active]);
+  // A conversation opens on its last message, before the first paint: no visible scrolling. While the view
+  // is stuck to the bottom, late content (messages loading, images) keeps it there; a scroll up unsticks it.
+  const stick = useRef(true);
+  const lastTop = useRef(0);
+  const opened = useRef(0); // when the conversation was shown: content arriving soon after jumps, later it glides
+  const convKey = `${agent.slug}:${active}`;
+  const toBottom = (smooth) => {
+    const el = list_.current;
+    if (!el) return;
+    if (smooth) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    else el.scrollTop = el.scrollHeight;
+  };
+  useLayoutEffect(() => {
+    const el = list_.current;
+    if (!el) return;
+    const saved = scrollPos.get(convKey);
+    stick.current = saved === undefined;
+    opened.current = performance.now();
+    if (stick.current) toBottom(false);
+    else el.scrollTop = saved;
+    lastTop.current = el.scrollTop;
+    return () => { if (!stick.current) scrollPos.set(convKey, lastTop.current); else scrollPos.delete(convKey); };
+  }, [convKey, chat?.loaded]);
+  useLayoutEffect(() => {
+    if (stick.current) toBottom(performance.now() - opened.current > 1500);
+  }, [chat?.messages.length, chat?.busy]);
+  useEffect(() => {
+    const el = list_.current;
+    const col = el?.firstElementChild;
+    if (!col) return;
+    const onScroll = () => {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      if (atBottom) stick.current = true;
+      else if (el.scrollTop < lastTop.current - 2) stick.current = false; // only the user scrolls up
+      lastTop.current = el.scrollTop;
+    };
+    const ro = new ResizeObserver(() => { if (stick.current) toBottom(performance.now() - opened.current > 1500); });
+    el.addEventListener('scroll', onScroll, { passive: true });
+    ro.observe(col);
+    return () => { el.removeEventListener('scroll', onScroll); ro.disconnect(); };
+  }, []);
   useEffect(() => {
     drafts.current.set(active, text);
     const el = input.current;
@@ -211,7 +253,7 @@ export default function AgentChat({ agent, go }) {
 
       <div className="chat-list" ref={list_}>
         <div className="chat-column">
-          {!messages.length && (
+          {!messages.length && chat?.loaded !== false && (
             <div className="chat-empty">
               <BotAvatar spec={agent.avatar} seed={agent.slug} size={88} className="chat-empty-bot" />
               <h2>Salut, moi c'est {agent.label}</h2>
