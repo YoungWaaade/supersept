@@ -95,7 +95,7 @@ export default function App() {
     return () => { dead = true; clearTimeout(timer); sock?.close(); };
   }, [load]);
 
-  const attention = data.workspaces.filter((w) => !w.archived && (w.status === 'review' || w.status === 'waiting')).length;
+  const attention = data.workspaces.filter((w) => !w.archived && ['review', 'waiting', 'error'].includes(w.status)).length;
   useEffect(() => { document.title = attention ? `(${attention}) Supersept` : 'Supersept'; }, [attention]);
 
   const go = (r) => { location.hash = r.id ? `#/${r.kind}/${r.id}` : `#/${r.kind}`; };
@@ -197,11 +197,11 @@ export default function App() {
 
 function notify(ws, projects, route) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  if (ws.status !== 'review' && ws.status !== 'waiting') return;
+  if (!['review', 'waiting', 'error'].includes(ws.status)) return;
   if (!document.hidden && route.kind === 'ws' && route.id === ws.id) return;
   const project = projects.find((p) => p.id === ws.project_id);
   const title = `${project ? project.name + ' · ' : ''}${ws.name}`;
-  const body = ws.status === 'waiting' ? ws.last_message || STATUS.waiting.label : (ws.last_message || 'Terminé, à revoir').slice(0, 180);
+  const body = ws.status === 'waiting' || ws.status === 'error' ? ws.last_message || STATUS[ws.status].label : (ws.last_message || 'Terminé, à revoir').slice(0, 180);
   let n;
   try { n = new Notification(title, { body, tag: ws.id }); } catch { return; } // iOS: only Web Push, the constructor throws
   n.onclick = () => { focus(); location.hash = `#/ws/${ws.id}`; n.close(); };

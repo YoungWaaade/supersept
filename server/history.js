@@ -99,7 +99,7 @@ export function recentAssistantTexts(transcriptPath, n = 3) {
   const out = [];
   try {
     const st = fs.statSync(transcriptPath);
-    const size = Math.min(st.size, 2 * 1024 * 1024);
+    const size = Math.min(st.size, 8 * 1024 * 1024); // screenshots make lines huge
     const fd = fs.openSync(transcriptPath, 'r');
     const buf = Buffer.alloc(size);
     fs.readSync(fd, buf, 0, size, st.size - size);
@@ -109,7 +109,7 @@ export function recentAssistantTexts(transcriptPath, n = 3) {
       if (!line.includes('"assistant"')) continue;
       try {
         const o = JSON.parse(line);
-        if (o.type !== 'assistant' || o.isSidechain) continue;
+        if (o.type !== 'assistant' || o.isSidechain || o.isApiErrorMessage || o.message?.model === '<synthetic>') continue;
         const t = textOf(o.message?.content).trim();
         if (t) out.unshift(t);
       } catch {}

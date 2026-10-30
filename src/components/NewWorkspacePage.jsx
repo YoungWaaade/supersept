@@ -128,7 +128,7 @@ export default function NewWorkspacePage({ projects, agents = [], initialProject
     let full = prompt.trim();
     for (const l of links.filter((x) => x.kind === 'issue')) full += `\n\nIssue GitHub #${l.number} — ${l.title}\n${l.url}\n${(l.body || '').slice(0, 4000)}`;
     if (pr) full += `\n\nTravaille à partir de la PR #${pr.number} — ${pr.title} (${pr.url}).`;
-    if (attachments.length) full += `\n\nPièces jointes : ${attachments.map((a) => '@' + a.path).join(' ')}`;
+    if (attachments.length) full += `\n\nPièces jointes (lis-les avec Read quand tu en as besoin) : ${attachments.map((a) => a.path).join(' ')}`;
     try {
       const w = await api.post('/api/workspaces', {
         projectId: projectId || null,

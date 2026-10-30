@@ -96,13 +96,14 @@ async function refreshStats(id) {
 }
 
 // ---------- agent launch ----------
+// PreToolUse prints the answer: that's how Supersept stops a turn whose context got too heavy (see the hook).
 function hookSettings(wsId) {
   const cmd = (event) => ({
     type: 'command',
-    command: `curl -s -m 3 -X POST -H 'Content-Type: application/json' --data-binary @- http://${HOST}:${PORT}/api/hook/${wsId}/${event} >/dev/null 2>&1 || true`,
+    command: `curl -s -m 3 -X POST -H 'Content-Type: application/json' --data-binary @- http://${HOST}:${PORT}/api/hook/${wsId}/${event}${event === 'PreToolUse' ? ' 2>/dev/null' : ' >/dev/null 2>&1'} || true`,
   });
   const hooks = {};
-  for (const e of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Notification', 'Stop', 'SessionEnd', 'PreCompact']) {
+  for (const e of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Notification', 'Stop', 'StopFailure', 'SessionEnd', 'PreCompact']) {
     hooks[e] = [{ ...(e === 'PreToolUse' ? { matcher: '*' } : {}), hooks: [cmd(e)] }];
   }
   const file = path.join(HOOKS_DIR, `${wsId}.json`);
@@ -112,17 +113,37 @@ function hookSettings(wsId) {
 
 // Sessions outside any project share one memory file.
 const SESSIONS_MEMORY_ID = 'sessions';
+// Long texts for Claude (missions, messages, handoffs) go through a file it reads, not the command line or the PTY.
+const PROMPTS_DIR = path.join(HUB_DIR, 'prompts');
+fs.mkdirSync(PROMPTS_DIR, { recursive: true });
+const PROMPT_INLINE_MAX = 3000;
+const MESSAGE_INLINE_MAX = 1500;
+// The memory is resent with every request of every session: past this size, only its beginning is injected.
+const MEMORY_INLINE_MAX = 12000;
+
+function promptFile(name, text) {
+  const file = path.join(PROMPTS_DIR, `${name}.md`);
+  fs.writeFileSync(file, text);
+  return file;
+}
+
+const memoryExcerpt = (content, file) => {
+  if (content.length <= MEMORY_INLINE_MAX) return content;
+  const cut = content.lastIndexOf('\n', MEMORY_INLINE_MAX * 0.75);
+  return `${content.slice(0, cut > 0 ? cut : MEMORY_INLINE_MAX * 0.75)}\n\n[… mémoire tronquée : ${content.length} caractères au total. Lis le fichier ${file} en entier avec Read avant de commencer, la suite contient aussi des règles.]`;
+};
 
 function systemPrompt(ws, project) {
   const mem = memoryFile(project?.id ?? SESSIONS_MEMORY_ID);
-  const content = fs.existsSync(mem) ? fs.readFileSync(mem, 'utf8').trim() : '';
+  const content = memoryExcerpt(fs.existsSync(mem) ? fs.readFileSync(mem, 'utf8').trim() : '', mem);
   return [
     project
       ? `Tu tournes dans Supersept, workspace "${ws.name}" du projet "${project.name}" (${project.path}).`
       : `Tu tournes dans Supersept, session libre "${ws.name}" (hors projet) dans ${ws.cwd}.`,
     ws.is_worktree ? `Ce workspace est un git worktree isolé sur la branche "${ws.branch}" (base: ${ws.base_branch}). Ne travaille que dans ${ws.cwd}.` : '',
     `Mémoire persistante ${project ? 'du projet' : 'des sessions libres'} : ${mem}`,
-    `Elle est partagée entre toutes les sessions ${project ? 'de ce projet' : 'libres'}. Quand tu apprends quelque chose de durable (décisions, conventions, commandes utiles, état d'avancement, pièges), mets-la à jour de façon concise (puces courtes, sections par thème). N'y mets rien d'éphémère.`,
+    `Elle est partagée entre toutes les sessions ${project ? 'de ce projet' : 'libres'}. Quand tu apprends quelque chose de durable (décisions, conventions, commandes utiles, état d'avancement, pièges), mets-la à jour de façon concise (puces courtes, sections par thème). N'y mets rien d'éphémère. Garde-la courte (moins de ${MEMORY_INLINE_MAX} caractères) : fusionne ou retire les règles redondantes plutôt que d'en empiler.`,
+    "Chaque image que tu regardes (capture d'écran, Read d'un .png/.jpg) reste dans le contexte en base64, et au-delà d'environ 30 Mo l'API refuse toute requête : ne regarde que les captures utiles, réduites (par ex. sips -Z 1200), et ne relis pas la même plusieurs fois.",
     content ? `--- Contenu actuel de la mémoire ---\n${content}\n--- fin ---` : 'La mémoire est vide pour l\'instant.',
   ].filter(Boolean).join('\n');
 }
@@ -160,7 +181,7 @@ function startAgent(wsId) {
     const pid = externalHolder(ws.session_id);
     if (pid) throw Object.assign(new Error(`Cette conversation est encore ouverte dans un autre terminal (process ${pid}, par exemple un onglet iTerm).\r\nFerme-la là-bas : elle reprendra ici automatiquement.`), { busy: true });
   }
-  const args = ['--settings', hookSettings(ws.id), '--add-dir', MEMORY_DIR, '--append-system-prompt', systemPrompt(ws, project), '-n', ws.name];
+  const args = ['--settings', hookSettings(ws.id), '--add-dir', MEMORY_DIR, '--add-dir', PROMPTS_DIR, '--append-system-prompt', systemPrompt(ws, project), '-n', ws.name];
   // A custom agent brings its own instructions/model; the workspace's explicit choices win.
   const agent = ws.agent ? getAgent(ws.agent) : null;
   if (agent) args.push('--agent', agent.slug);
@@ -176,13 +197,18 @@ function startAgent(wsId) {
   else {
     args.push('--session-id', ws.session_id);
     const first = ws.initial_prompt || agent?.initialPrompt;
-    if (first) args.push(first);
+    if (first) args.push(first.length > PROMPT_INLINE_MAX
+      ? `${first.slice(0, 300).trim()}…\n\nCe message est long : il est en entier dans ${promptFile(ws.id, first)}. Lis ce fichier en entier avec Read avant toute action, puis suis-le.`
+      : first);
   }
   // autostart marks agents to bring back if the hub restarts (update, crash, reboot).
   db.prepare('UPDATE workspaces SET autostart = 1 WHERE id = ?').run(ws.id);
   const s = spawn(`${ws.id}:agent`, CLAUDE, args, ws.cwd, {
     env: { CLAUDE_HUB_WORKSPACE: ws.id },
     onExit: () => {
+      // Messages still waiting are kept for the next start.
+      clearTimeout(booting.get(ws.id));
+      booting.delete(ws.id);
       if (!shuttingDown) db.prepare('UPDATE workspaces SET autostart = 0 WHERE id = ?').run(ws.id);
       // Died while writing its handoff: build it from the transcript instead.
       if (!shuttingDown && relaying.get(ws.id)?.phase === 'asking') finishRelay(ws.id, null, 'transcript');
@@ -190,6 +216,8 @@ function startAgent(wsId) {
       refreshStats(ws.id);
     },
   });
+  clearTimeout(booting.get(ws.id));
+  booting.set(ws.id, setTimeout(() => ready(ws.id), BOOT_TIMEOUT));
   watchTrustPrompt(s, ws, project);
   settle(ws.id);
   return s;
@@ -789,24 +817,49 @@ app.post('/api/agents/:slug/chat/reset', (req, res) => res.json({ conversation: 
 // Type a message into a session's Claude (used by chat agents to answer or follow up).
 // Paste the text (bracketed paste, so Claude Code treats it as one block), then press Enter
 // separately: sent in the same burst, the Enter would be swallowed by the paste and never submit.
-// A freshly (re)started Claude needs a few seconds before it accepts input.
 // Claude Code refuses to send invisible characters (French non-breaking spaces before « : », zero-width
 // chars…) and asks to "review and press Enter": normalise them, and confirm if it still asks.
+// Typed while Claude is still starting, a message is lost: those wait until the session is up.
+const booting = new Map(); // workspace id → fallback timer, while its Claude is starting
+const inbox = new Map(); // workspace id → messages waiting for the session to be up
+const BOOT_TIMEOUT = 20000;
+
+function deliver(s, text) {
+  const clean = text.replace(/\r?\n/g, ' ').replace(/[\u00a0\u202f\u2007\u2009\u200a]/g, ' ').replace(/[\u200b-\u200d\u2060\ufeff]/g, '');
+  s.write(`\x1b[200~${clean}\x1b[201~`);
+  setTimeout(() => {
+    const mark = s.buffer.length;
+    s.write('\r');
+    setTimeout(() => {
+      if (/press\s*Enter\s*to\s*send/i.test(s.buffer.slice(mark).replace(/\x1b\[[0-9;?<>]*[a-zA-Z]/g, ''))) s.write('\r');
+    }, 1200);
+  }, 400);
+}
+
+// The session is up (SessionStart, first prompt taken, or timeout): hand it what was waiting, one by one.
+function ready(wsId) {
+  if (!booting.has(wsId)) return;
+  clearTimeout(booting.get(wsId));
+  booting.delete(wsId);
+  const s = sessions.get(`${wsId}:agent`);
+  const queued = inbox.get(wsId) || [];
+  if (!s?.alive || !queued.length) return;
+  inbox.delete(wsId);
+  queued.forEach((t, i) => setTimeout(() => (s.alive ? deliver(s, t) : typeInto(wsId, t)), i * 2500));
+}
+
 function typeInto(wsId, text) {
   let s = sessions.get(`${wsId}:agent`);
   const fresh = !s?.alive;
+  // Long messages: Claude reads them from a file, with their formatting (the PTY flattens line breaks).
+  if (text.length > MESSAGE_INLINE_MAX) {
+    const file = promptFile(`${wsId}-${Date.now()}`, text);
+    text = `${text.slice(0, 300).replace(/\s+/g, ' ').trim()}… [Message long : lis le fichier ${file} en entier avec Read avant d'agir, il contient toutes les consignes.]`;
+  }
   if (fresh) s = startAgent(wsId);
-  const clean = text.replace(/\r?\n/g, ' ').replace(/[\u00a0\u202f\u2007\u2009\u200a]/g, ' ').replace(/[\u200b-\u200d\u2060\ufeff]/g, '');
-  setTimeout(() => {
-    s.write(`\x1b[200~${clean}\x1b[201~`);
-    setTimeout(() => {
-      const mark = s.buffer.length;
-      s.write('\r');
-      setTimeout(() => {
-        if (/press\s*Enter\s*to\s*send/i.test(s.buffer.slice(mark).replace(/\x1b\[[0-9;?<>]*[a-zA-Z]/g, ''))) s.write('\r');
-      }, 1200);
-    }, 400);
-  }, fresh ? 6000 : 50);
+  if (booting.has(wsId)) {
+    inbox.set(wsId, [...(inbox.get(wsId) || []), text]);
+  } else setTimeout(() => deliver(s, text), 50);
   return fresh;
 }
 
@@ -882,7 +935,7 @@ app.get('/api/prompts', (req, res) => {
   res.json(rows);
 });
 
-// Attachments are saved on disk and handed to Claude as @file references.
+// Attachments are saved on disk and handed to Claude as paths it reads (an @file would paste images in base64).
 app.post('/api/attachments', express.raw({ type: '*/*', limit: '10mb' }), (req, res) => {
   const name = path.basename(String(req.query.name || 'fichier')).replace(/[^\w.-]/g, '_') || 'fichier';
   const dir = path.join(HUB_DIR, 'attachments', uid());
@@ -951,10 +1004,10 @@ app.post('/api/workspaces/:id/open', wrap(async (req, res) => {
 }));
 
 // Tell the chat agent that launched a session what happened, so it can follow up on its own.
-function reportToOwner(wsId, what, text) {
+function reportToOwner(wsId, what, text, { label = 'Son dernier message' } = {}) {
   const ws = getWorkspace(wsId);
   if (!ws?.owner_agent || !getAgent(ws.owner_agent) || ws.successor || relaying.has(wsId)) return;
-  const msg = `[Supersept] La session « ${ws.name} » (id ${ws.id}) ${what}.${text ? ` Son dernier message : ${String(text).slice(0, 1500)}` : ''}`;
+  const msg = `[Supersept] La session « ${ws.name} » (id ${ws.id}) ${what}.${text ? ` ${label} : ${String(text).slice(0, 1500)}` : ''}`;
   try { sendToAgent(ws.owner_agent, msg, { internal: true, conversation: ws.owner_conv ?? null }); } catch {}
 }
 
@@ -965,11 +1018,29 @@ const HANDOFF_TIMEOUT = Number(process.env.SUPERSEPT_HANDOFF_TIMEOUT_MS) || 4 * 
 
 function measureWorkspace(id, transcript) {
   const ws = getWorkspace(id);
-  const u = relay.transcriptUsage(transcript || transcriptPath(ws.cwd, ws.session_id));
-  const m = u && relay.measure({ tokens: u.tokens, model: u.model, requested: ws.model });
+  const u = relay.transcriptLoad(transcript || transcriptPath(ws.cwd, ws.session_id));
+  const m = u?.tokens ? relay.measure({ tokens: u.tokens, model: u.model, requested: ws.model }) : null;
   if (m) db.prepare('UPDATE workspaces SET context_tokens = ?, context_window = ? WHERE id = ?').run(m.tokens, m.window, id);
   return m;
 }
+
+const mb = (bytes) => (bytes / 1048576).toFixed(1).replace('.', ',');
+const stopsOf = (id) => db.prepare("SELECT COUNT(*) AS n FROM events WHERE workspace_id = ? AND kind = 'stop'").get(id).n;
+
+// Is the context too heavy to go on? Tokens past the relay threshold, or too many images: each screenshot stays
+// in the context as base64, and past ~32 MB the API answers "400 Input is too long" whatever the token count.
+// A session that just took over is spared the token threshold on its first turn (the handoff alone may be above
+// a low one), up to the hard limit.
+function overload(ws, transcript, { firstTurn = false } = {}) {
+  if (!relay.config().enabled) return null;
+  const l = relay.transcriptLoad(transcript || transcriptPath(ws.cwd, ws.session_id));
+  if (!l) return null;
+  if (l.imageBytes >= relay.imageBudget()) return { reason: 'images', text: `${l.images} images, ${mb(l.imageBytes)} Mo` };
+  const m = l.tokens ? relay.measure({ tokens: l.tokens, model: l.model, requested: ws.model }) : null;
+  if (!m?.over || (firstTurn && m.tokens < m.window * 0.9)) return null;
+  return { reason: 'seuil', text: `${m.tokens} / ${m.window} tokens` };
+}
+const wrappingUp = new Set(); // sessions told to end their turn (logged once per turn)
 
 // Step 1: at the end of a turn, ask the old session for a handoff summary (its next Stop carries it).
 function beginRelay(id, { reason, force = false } = {}) {
@@ -986,11 +1057,40 @@ function beginRelay(id, { reason, force = false } = {}) {
   return true;
 }
 
+// The relay chain of a session, oldest first.
+function chainOf(ws) {
+  const chain = [ws];
+  while (chain.length < 50 && chain[0].predecessor) {
+    const p = getWorkspace(chain[0].predecessor);
+    if (!p) break;
+    chain.unshift(p);
+  }
+  return chain;
+}
+
+// Everything the user and agents sent along the chain, word for word: a handoff summary tends to drop the
+// instructions given along the way. Each message is logged twice (send + UserPromptSubmit): keep one.
+function instructionsOf(ws) {
+  const out = [];
+  for (const w of chainOf(ws)) {
+    for (const e of db.prepare("SELECT text, at FROM events WHERE workspace_id = ? AND kind = 'prompt' ORDER BY at").all(w.id)) {
+      const t = String(e.text || '').trim();
+      if (!t || /^\[Supersept\]|^<task-notification>|\[Message long : lis le fichier|Ce message est long : il est en entier dans/.test(t)) continue;
+      const key = t.replace(/\s+/g, ' ').slice(0, 200);
+      if (w.initial_prompt && w.initial_prompt.replace(/\s+/g, ' ').startsWith(key)) continue;
+      const dup = out.find((o) => o.key === key && Math.abs(o.at - e.at) < 60000);
+      if (dup) { if (t.length > dup.text.length) dup.text = t; continue; }
+      out.push({ key, at: e.at, text: t });
+    }
+  }
+  return out;
+}
+
 // Without an answer from the session: mission + its last messages, straight from the transcript.
 function transcriptHandoff(ws, transcript) {
   const last = recentAssistantTexts(transcript, 3);
   return [
-    '## Mission', relay.stripIntro(ws.initial_prompt) || firstPrompt(transcript) || '(inconnue)', '',
+    '## Mission', chainOf(ws)[0].initial_prompt || relay.stripIntro(ws.initial_prompt) || firstPrompt(transcript) || '(inconnue)', '',
     '## Derniers messages de la session précédente', ...(last.length ? last.map((t) => `> ${t.slice(0, 3000).replace(/\n/g, '\n> ')}`) : ['(aucun)']), '',
     '## Repères', `- Dossier : ${ws.cwd}`, ws.branch ? `- Branche : ${ws.branch}${ws.base_branch ? ` (base ${ws.base_branch})` : ''}` : null,
   ].filter((l) => l !== null).join('\n');
@@ -1005,10 +1105,19 @@ function finishRelay(id, summary, source) {
   clearTimeout(r.timer);
   // A too short answer is not a handoff (e.g. the session refused or got cut).
   if (!summary || summary.trim().length < 80) { summary = transcriptHandoff(ws, r.transcript); source = 'transcript'; }
+  r.pending.push(...(inbox.get(id) || []));
+  inbox.delete(id);
+  const root = chainOf(ws)[0];
+  const asked = instructionsOf(ws).filter((a) => !r.pending.includes(a.text));
+  // Long: startAgent hands it over as a file to read.
   const intro = [
     relay.handoffIntro(summary, `la session « ${ws.name} »`, source === 'session'),
     `\n\nTranscript complet de la session précédente, si un détail manque : ${r.transcript}`,
-    r.pending.length ? `\n\nMessages reçus pendant le relais, à traiter :\n${r.pending.map((t) => `- ${t}`).join('\n')}` : '',
+    // The transcript handoff already starts with the mission.
+    source === 'session' || asked.length ? `\n\n## Mission d'origine et consignes reçues depuis (texte intégral, toujours valables sauf si une consigne plus récente dit le contraire)` : '',
+    source === 'session' ? `\n\n### Mission d'origine\n${root.initial_prompt || '(voir le résumé)'}` : '',
+    ...asked.map((a, i) => `\n\n### Consigne ${i + 1} (${new Date(a.at).toLocaleString('fr-FR')})\n${a.text}`),
+    r.pending.length ? `\n\n## Messages reçus pendant le relais, à traiter\n${r.pending.map((t) => `- ${t}`).join('\n')}` : '',
   ].join('');
   const newId = uid();
   const sessionId = crypto.randomUUID();
@@ -1041,13 +1150,55 @@ function finishRelay(id, summary, source) {
   broadcast({ type: 'relay', kind: 'workspace', from: ws.id, to: newId, name: ws.name, tokens: r.tokens, window: r.window });
 }
 
-// Claude Code hooks (called by curl from inside the agent, no Origin header).
-app.post('/api/hook/:id/:event', (req, res) => {
-  res.json({});
-  const { id, event } = req.params;
+// Relay right away from the transcript: the session can't answer any more (its context is too big to send).
+function relayNow(id, reason) {
+  const ws = getWorkspace(id);
+  if (!ws || ws.archived || ws.successor || relaying.has(id)) return false;
+  relaying.set(id, { phase: 'asking', pending: [], reason, tokens: ws.context_tokens, window: ws.context_window, transcript: transcriptPath(ws.cwd, ws.session_id) });
+  logEvent(id, 'relay', `Relais immédiat (${reason}) : résumé reconstruit depuis le transcript`);
+  finishRelay(id, null, 'transcript');
+  return true;
+}
+
+// The turn ended on an API error. Claude Code then only says "waiting for your input": without this the session
+// looked like it had a question, and every new message hit the same error.
+function onApiError(id, error, transcript) {
   const ws = getWorkspace(id);
   if (!ws) return;
+  if (relaying.get(id)?.phase === 'asking') { finishRelay(id, null, 'transcript'); return; }
+  const l = relay.transcriptLoad(transcript || transcriptPath(ws.cwd, ws.session_id));
+  const tooLong = relay.isTooLong(error);
+  const canRelay = tooLong && relay.config().enabled && !(ws.predecessor && stopsOf(id) === 0);
+  const weight = l ? ` Son contexte : ${l.tokens} tokens${l.images ? ` et ${l.images} images (${mb(l.imageBytes)} Mo en base64 ; une requête ne peut pas dépasser ~32 Mo)` : ''}.` : '';
+  const msg = `Erreur de l'API : ${String(error).slice(0, 300).replace(/[.\s]+$/, '')}.${tooLong ? weight : ''} ${canRelay
+    ? 'Supersept la relaie vers une nouvelle session (même id, même dossier), qui reprend avec la mission et toutes les consignes.'
+    : tooLong ? "Elle ne peut plus continuer : relance une nouvelle session avec une mission plus courte, moins de captures, et une mémoire de projet allégée."
+    : 'Renvoie-lui un message pour réessayer.'}`;
+  logEvent(id, 'error', msg);
+  setStatus(id, 'error', msg);
+  reportToOwner(id, 'est bloquée par une erreur', msg, { label: 'Détail' });
+  if (canRelay) relayNow(id, 'requête trop longue');
+}
+
+// Claude Code hooks (called by curl from inside the agent, no Origin header).
+app.post('/api/hook/:id/:event', (req, res) => {
+  const { id, event } = req.params;
+  const ws = getWorkspace(id);
+  if (!ws) return res.json({});
   const body = req.body || {};
+  // Mid-turn: a turn that keeps calling tools (dozens of screenshots) never reaches Stop, where relays happen.
+  // Refuse its tools so it ends the turn, and the relay starts at its Stop.
+  if (event === 'PreToolUse') {
+    const o = overload(ws, body.transcript_path, { firstTurn: !!ws.predecessor && stopsOf(id) === 0 });
+    if (o) {
+      if (!wrappingUp.has(id)) { wrappingUp.add(id); logEvent(id, 'relay', `Contexte trop chargé en cours de tour (${o.text}) : outils refusés, relais à la fin du tour`); }
+      const asking = relaying.get(id)?.phase === 'asking';
+      return res.json({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: asking
+        ? `[Supersept] Contexte trop chargé (${o.text}) : n'appelle aucun outil, écris seulement ton résumé de passation.`
+        : `[Supersept] Contexte trop chargé (${o.text}) : au-delà, l'API refusera les requêtes. N'appelle plus aucun outil. Termine ton tour maintenant par un court point d'étape (fait, en cours, reste à faire) : Supersept relaie ensuite ce travail vers une nouvelle session qui reprendra la suite.` } });
+    }
+  }
+  res.json({});
   if (body.session_id && body.session_id !== ws.session_id) {
     // /clear or a fork created a new conversation: follow it so resume picks up the latest.
     db.prepare('UPDATE workspaces SET session_id = ? WHERE id = ?').run(body.session_id, id);
@@ -1057,13 +1208,17 @@ app.post('/api/hook/:id/:event', (req, res) => {
       db.prepare('UPDATE workspaces SET has_conversation = 1 WHERE id = ?').run(id);
       logEvent(id, 'prompt', String(body.prompt || '').slice(0, 2000));
       setStatus(id, 'working', null);
+      ready(id); // took its first prompt: messages typed now are queued by Claude Code
       break;
     case 'PreToolUse':
       if (ws.status !== 'working') setStatus(id, 'working');
       break;
     case 'Notification': {
       const msg = String(body.message || 'En attente de ton input');
-      if (/idle|waiting for your input/i.test(msg) && ws.status === 'review') break;
+      if (/idle|waiting for your input/i.test(msg) && (ws.status === 'review' || ws.status === 'error')) break;
+      // Without StopFailure (older Claude Code), an API error only shows up as this idle notification.
+      const failed = /idle|waiting for your input/i.test(msg) && relay.transcriptLoad(body.transcript_path || transcriptPath(ws.cwd, ws.session_id))?.error;
+      if (failed) { onApiError(id, failed, body.transcript_path); break; }
       logEvent(id, 'waiting', msg);
       setStatus(id, 'waiting', msg);
       reportToOwner(id, 'attend une réponse', msg);
@@ -1071,23 +1226,28 @@ app.post('/api/hook/:id/:event', (req, res) => {
     }
     case 'Stop': {
       const text = body.last_assistant_message || (body.transcript_path && lastAssistantText(body.transcript_path)) || null;
+      wrappingUp.delete(id);
       if (relaying.get(id)?.phase === 'asking') { finishRelay(id, text, 'session'); break; }
-      const m = measureWorkspace(id, body.transcript_path);
+      measureWorkspace(id, body.transcript_path);
       logEvent(id, 'stop', text?.slice(0, 4000));
       setStatus(id, 'review', text?.slice(0, 600) ?? null);
       refreshStats(id);
       reportToOwner(id, 'vient de terminer', text);
-      // A session that just took over doesn't relay on its first turn (the handoff alone may be above a low threshold).
-      const firstTurn = ws.predecessor && db.prepare("SELECT COUNT(*) AS n FROM events WHERE workspace_id = ? AND kind = 'stop'").get(id).n < 2;
-      if ((m?.over || compactPending.has(id)) && !firstTurn) beginRelay(id, { reason: m?.over ? 'seuil' : 'auto-compact' });
+      const o = overload(ws, body.transcript_path, { firstTurn: !!ws.predecessor && stopsOf(id) < 2 });
+      if (o || compactPending.has(id)) beginRelay(id, { reason: o ? o.reason : 'auto-compact' });
       break;
     }
+    case 'StopFailure':
+      wrappingUp.delete(id);
+      onApiError(id, [body.last_assistant_message, body.error_details, body.error].filter(Boolean).join(' — ') || 'erreur inconnue', body.transcript_path);
+      break;
     case 'PreCompact':
       // Auto-compact means the context is full; relay at the end of the turn (never in the middle).
       if (body.trigger !== 'manual') { compactPending.add(id); logEvent(id, 'compact', 'Contexte plein : compaction automatique, relais à la fin du tour'); }
       break;
     case 'SessionStart':
       pushWorkspace(id);
+      setTimeout(() => ready(id), 1500);
       break;
     case 'SessionEnd':
       settle(id);

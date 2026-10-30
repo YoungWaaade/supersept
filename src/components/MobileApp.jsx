@@ -39,9 +39,9 @@ export default function MobileApp({ data, projectsById, route, go, connected, lo
 function ListScreen({ data, projectsById, go, connected }) {
   const live = data.workspaces.filter((w) => !w.archived);
   const groups = [
-    ['À traiter', live.filter((w) => w.status === 'waiting' || w.status === 'review')],
+    ['À traiter', live.filter((w) => ['waiting', 'review', 'error'].includes(w.status))],
     ['En cours', live.filter((w) => w.status === 'working')],
-    ['Autres', live.filter((w) => !['waiting', 'review', 'working'].includes(w.status)).sort((a, b) => b.updated_at - a.updated_at)],
+    ['Autres', live.filter((w) => !['waiting', 'review', 'working', 'error'].includes(w.status)).sort((a, b) => b.updated_at - a.updated_at)],
   ];
   return (
     <>
@@ -77,7 +77,7 @@ function Row({ ws, project, onClick }) {
         <span className="m-row-sub">
           {project?.name || 'Session libre'}{ws.branch ? ` · ${ws.branch}` : ''} <DiffStats stats={ws.stats} />
         </span>
-        {ws.last_message && (ws.status === 'waiting' || ws.status === 'review') && <span className="m-row-msg">{ws.last_message}</span>}
+        {ws.last_message && ['waiting', 'review', 'error'].includes(ws.status) && <span className="m-row-msg">{ws.last_message}</span>}
       </span>
     </button>
   );

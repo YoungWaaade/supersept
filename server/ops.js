@@ -14,7 +14,7 @@ async function call(method, path, body) {
   return data;
 }
 
-const STATUS = { working: 'en cours', waiting: 'attend une réponse', review: 'terminée, à revoir', idle: 'inactive', done: 'terminée' };
+const STATUS = { working: 'en cours', waiting: 'attend une réponse', review: 'terminée, à revoir', error: 'en erreur (voir dernier_message)', idle: 'inactive', done: 'terminée' };
 const brief = (w, projects = []) => ({
   id: w.id,
   nom: w.name,

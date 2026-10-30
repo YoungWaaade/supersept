@@ -12,7 +12,9 @@ import { HUB_DIR } from './db.js';
 const CONFIG = path.join(HUB_DIR, 'relay.json');
 const WINDOWS = path.join(HUB_DIR, 'context-windows.json');
 // 200k cap by default: on 1M windows, 75 % (750k) is far too late, sessions misbehave well before.
-const DEFAULTS = { enabled: true, percent: 75, maxTokens: 200_000, windows: {} };
+// maxImageMB: images (screenshots, Read of .png/.jpg) stay in the context as base64 and the API refuses requests
+// above ~32 MB ("400 Input is too long") long before the token window is full: relay well before that.
+const DEFAULTS = { enabled: true, percent: 75, maxTokens: 200_000, maxImageMB: 20, windows: {} };
 const DEFAULT_WINDOW = 200_000;
 const LARGE_WINDOW = 1_000_000;
 
@@ -24,6 +26,7 @@ export function config() {
   const c = { ...DEFAULTS, ...readJson(CONFIG, {}) };
   c.percent = Math.min(95, Math.max(1, Number(c.percent) || DEFAULTS.percent));
   c.maxTokens = Number(c.maxTokens) > 0 ? Math.round(Number(c.maxTokens)) : null;
+  c.maxImageMB = Math.min(30, Math.max(1, Number(c.maxImageMB) || DEFAULTS.maxImageMB));
   return c;
 }
 
@@ -32,6 +35,7 @@ export function setConfig(patch = {}) {
   if (patch.enabled !== undefined) c.enabled = !!patch.enabled;
   if (patch.percent !== undefined) c.percent = patch.percent;
   if (patch.maxTokens !== undefined) c.maxTokens = patch.maxTokens || null;
+  if (patch.maxImageMB !== undefined) c.maxImageMB = patch.maxImageMB;
   if (patch.windows && typeof patch.windows === 'object') c.windows = patch.windows;
   fs.writeFileSync(CONFIG, JSON.stringify(c, null, 2));
   return config();
@@ -89,6 +93,58 @@ export function transcriptUsage(transcriptPath) {
   } catch {}
   return null;
 }
+
+// What a conversation's next request carries, read incrementally (transcripts reach 70 MB): last main-chain
+// usage, and the base64 images still in the context (reset by a compaction). Also the trailing API error, if any.
+const loads = new Map(); // transcript path → { offset, imageBytes, images, tokens, model, error }
+const imageBytesOf = (x) => {
+  if (!x || typeof x !== 'object') return [0, 0];
+  if (x.type === 'image') return [String(x.source?.data || '').length, 1];
+  let b = 0, n = 0;
+  for (const v of Array.isArray(x) ? x : Object.values(x)) { const [vb, vn] = imageBytesOf(v); b += vb; n += vn; }
+  return [b, n];
+};
+export const textOf = (content) => (typeof content === 'string' ? content : (content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n'));
+export function transcriptLoad(file) {
+  let st;
+  try { st = fs.statSync(file); } catch { return null; }
+  let l = loads.get(file);
+  if (!l || st.size < l.offset) l = { offset: 0, imageBytes: 0, images: 0, tokens: 0, model: null, error: null };
+  if (st.size > l.offset) {
+    const fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(st.size - l.offset);
+    fs.readSync(fd, buf, 0, buf.length, l.offset);
+    fs.closeSync(fd);
+    const end = buf.lastIndexOf(10); // only complete lines; the rest is read next time
+    if (end >= 0) {
+      for (const line of buf.subarray(0, end).toString().split('\n')) {
+        if (!/"type":\s*"(user|assistant)"|compact_boundary/.test(line)) continue;
+        let o;
+        try { o = JSON.parse(line); } catch { continue; }
+        if (o.isSidechain) continue;
+        if (o.type === 'system' && o.subtype === 'compact_boundary') { l.imageBytes = 0; l.images = 0; continue; }
+        if (o.type !== 'user' && o.type !== 'assistant') continue;
+        const [b, n] = imageBytesOf(o.message?.content);
+        l.imageBytes += b;
+        l.images += n;
+        if (o.type === 'assistant') {
+          const text = textOf(o.message?.content);
+          l.error = o.isApiErrorMessage || (o.message?.model === '<synthetic>' && /^API Error/.test(text)) ? text : null;
+          if (o.message?.usage && o.message.model !== '<synthetic>') { l.tokens = contextOf(o.message.usage); l.model = o.message.model; }
+        } else if (o.message?.role === 'user' && textOf(o.message.content).trim()) l.error = null;
+      }
+      l.offset += end + 1;
+    }
+  }
+  loads.set(file, l);
+  return l;
+}
+
+export const imageBudget = () => config().maxImageMB * 1024 * 1024;
+
+// "Input is too long", "prompt is too long", 413…: the conversation can't take one more request.
+// Not "response exceeded the output token maximum": that one is about the answer, not the input.
+export const isTooLong = (error) => /(input|prompt|request) is too (long|large)|request_too_large|\b413\b|context (length|window|limit)/i.test(String(error || ''));
 
 // { tokens, window, limit, over } for a conversation, or null when nothing is known yet.
 export function measure({ tokens, model, requested = null, window = null }) {

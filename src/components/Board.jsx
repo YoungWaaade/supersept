@@ -12,7 +12,7 @@ const COLUMNS = [
   { key: 'attention', label: 'Nécessite votre attention' },
   { key: 'review', label: 'Revue requise' },
 ];
-const column = (w) => (w.status === 'waiting' ? 'attention' : w.status === 'working' ? 'working' : w.status === 'review' ? 'review' : 'idle');
+const column = (w) => (w.status === 'waiting' || w.status === 'error' ? 'attention' : w.status === 'working' ? 'working' : w.status === 'review' ? 'review' : 'idle');
 const STATUS_FILTERS = [['idle', 'Inactif'], ['working', 'En cours'], ['attention', 'Nécessite votre attention'], ['review', 'Revue requise']];
 const SORTS = [['recent', 'Activité récente'], ['created', 'Date de création'], ['name', 'Nom'], ['branch', 'Branche']];
 

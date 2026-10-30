@@ -15,12 +15,12 @@ export function AsciiSpinner({ className = '' }) {
   return <span className={`ascii-spinner ${className}`} aria-hidden="true">{SPINNER_FRAMES[i]}</span>;
 }
 
-// Superset's StatusIndicator: waiting = yellow ping, review = static green.
+// Superset's StatusIndicator: waiting = yellow ping, review = static green, error = static red.
 export function StatusIndicator({ status, className = '' }) {
-  if (status !== 'waiting' && status !== 'review' && status !== 'working') return null;
+  if (!['waiting', 'review', 'working', 'error'].includes(status)) return null;
   return (
     <span className={`status-ind ${status} ${className}`} title={STATUS[status]?.label}>
-      {status !== 'review' && <span className="status-ind-ping" />}
+      {status !== 'review' && status !== 'error' && <span className="status-ind-ping" />}
       <span className="status-ind-dot" />
     </span>
   );

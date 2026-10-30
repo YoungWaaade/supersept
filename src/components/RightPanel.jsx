@@ -356,7 +356,7 @@ function ReviewTab({ ws }) {
       <div className="rv-events">
         {events.map((e) => (
           <div key={e.id} className={`event ${e.kind}`}>
-            <div className="event-head"><span>{{ created: 'Créé', prompt: 'Toi', stop: 'Claude', waiting: 'Attente' }[e.kind] || e.kind}</span><time>{ago(e.at)}</time></div>
+            <div className="event-head"><span>{{ created: 'Créé', prompt: 'Toi', stop: 'Claude', waiting: 'Attente', error: 'Erreur' }[e.kind] || e.kind}</span><time>{ago(e.at)}</time></div>
             {e.text && <p>{e.text}</p>}
           </div>
         ))}
